@@ -34,6 +34,7 @@ library
                  , lifted-base
                  , mtl
                  , bytestring
+                 , containers
     exposed-modules: Network.HTTP.Conduit.Browser2
     ghc-options:     -Wall
 
@@ -50,8 +51,10 @@ test-suite test
                  , blaze-builder
                  , bytestring
                  , text
+                 , data-default
                  , conduit
                  , case-insensitive
+                 , containers
                  , utf8-string
                  , transformers
                  , resourcet
