@@ -16,6 +16,8 @@ import qualified Data.ByteString.Lazy as L
 import Data.IORef
 import Control.Monad.IO.Class (liftIO)
 
+-- TODO tests for responseTimeout/Browser.timeout.
+
 strictToLazy :: S.ByteString -> L.ByteString
 strictToLazy = L.fromChunks . replicate 1
 
