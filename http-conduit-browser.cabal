@@ -34,6 +34,7 @@ library
                  , mtl
                  , bytestring
                  , containers
+                 , socks
     if flag(new-http-conduit)
         build-depends: http-conduit          >= 1.7     && < 1.8
         exposed-modules: Network.HTTP.Conduit.Browser
@@ -71,6 +72,7 @@ test-suite test
                  , mtl
                  , warp
                  , wai
+                 , socks
 
 source-repository head
   type:     git
