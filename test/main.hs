@@ -1,12 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 import Test.Hspec
+import Control.Exception (Exception, toException)
 import qualified Data.ByteString as S
 import Network.Wai hiding (requestBody)
 import Network.Wai.Handler.Warp (run)
 import Network.HTTP.Conduit
 import Network.HTTP.Conduit.Browser2
 import Data.ByteString.Base64 (encode)
+import Data.Typeable (Typeable)
 import Control.Concurrent (forkIO, killThread)
 import Network.HTTP.Types
 import Control.Exception.Lifted (try)
@@ -17,6 +20,11 @@ import Data.IORef
 import Control.Monad.IO.Class (liftIO)
 
 -- TODO tests for responseTimeout/Browser.timeout.
+
+data TestException = TestException
+    deriving (Show, Typeable)
+
+instance Exception TestException
 
 strictToLazy :: S.ByteString -> L.ByteString
 strictToLazy = L.fromChunks . replicate 1
@@ -267,3 +275,14 @@ main = do
                 case elbs of
                      Left StatusCodeException{} -> return ()
                      _ -> error "redirectCount should be 0!"
+            it "uses checkStatus correctly" $ do
+                tid <- forkIO $ run 3012 app
+                request <- parseUrl "http://127.0.0.1:3012/useragent"
+                elbs <- try $ withManager $ \manager -> do
+                    browse manager $ do
+                        setCheckStatus $ Just $  \ _ _ -> Just $ toException TestException
+                        makeRequestLbs request
+                killThread tid
+                case elbs of
+                    Left TestException -> return ()
+                    _ -> error "Should have thrown an exception!"
