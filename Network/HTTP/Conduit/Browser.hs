@@ -100,14 +100,9 @@ import Data.CaseInsensitive (mk)
 import Data.ByteString.UTF8 (fromString)
 import Data.List (partition)
 import Web.Cookie (parseSetCookie)
-import Data.Default (def)
 import Data.Maybe (catMaybes)
 
-import Network.HTTP.Conduit.Cookies hiding (updateCookieJar)
-import Network.HTTP.Conduit.Request
-import Network.HTTP.Conduit.Response
-import Network.HTTP.Conduit.Manager
-import qualified Network.HTTP.Conduit as HC
+import Network.HTTP.Conduit
 
 data BrowserState = BrowserState
   { maxRedirects        :: Int
@@ -160,9 +155,9 @@ makeRequest request = do
                                   then (\(_,a,_) -> a) `fmap` performRequest request'
                                   else runRedirectionChain request' max_redirects [])
                 (\ e' -> retryHelper request' (retry_count - 1) (Just (e' :: HttpException)))
-              let code = HT.statusCode $ HC.responseStatus resp
+              let code = HT.statusCode $ responseStatus resp
               if code < 200 || code >= 300
-                then retryHelper request' (retry_count - 1) (Just $ HC.StatusCodeException (HC.responseStatus resp) (HC.responseHeaders resp))
+                then retryHelper request' (retry_count - 1) (Just $ StatusCodeException (responseStatus resp) (responseHeaders resp))
                 else return resp
         performRequest request' = do
               s@(BrowserState { manager = manager'
@@ -174,19 +169,19 @@ makeRequest request = do
               let (request'', cookie_jar') = insertCookiesIntoRequest
                                               (applyAuthorities auths request')
                                               (evictExpiredCookies cookie_jar now) now
-              res <- lift $ HC.http request'' manager'
-              (cookie_jar'', response) <- liftIO $ updateCookieJar res request'' now cookie_jar' cookie_filter
+              res <- lift $ http request'' manager'
+              (cookie_jar'', response) <- liftIO $ updateMyCookieJar res request'' now cookie_jar' cookie_filter
               put $ s {cookieJar = cookie_jar''}
               return (request'', res, response)
         runRedirectionChain request' redirect_count ress
           | redirect_count == (-1) = throw . TooManyRedirects =<< mapM (liftIO . runResourceT . lbsResponse) ress
           | otherwise = do
               (request'', res, response) <- performRequest request'
-              let code = HT.statusCode (HC.responseStatus response)
+              let code = HT.statusCode (responseStatus response)
               if code >= 300 && code < 400
-                then do request''' <- case HC.getRedirectedRequest request'' (responseHeaders response) code of
+                then do request''' <- case getRedirectedRequest request'' (responseHeaders response) code of
                             Just a -> return a
-                            Nothing -> throw . HC.UnparseableRedirect =<< (liftIO $ runResourceT $ lbsResponse response)
+                            Nothing -> throw . UnparseableRedirect =<< (liftIO $ runResourceT $ lbsResponse response)
                         runRedirectionChain request''' (redirect_count - 1) (res:ress)
                 else return res
         applyAuthorities auths request' = case auths request' of
@@ -199,11 +194,11 @@ makeRequest request = do
 makeRequestLbs :: Request (ResourceT IO) -> BrowserAction (Response L.ByteString)
 makeRequestLbs = liftIO . runResourceT . lbsResponse <=< makeRequest
 
-updateCookieJar :: Response a -> Request (ResourceT IO) -> UTCTime -> CookieJar -> (Request (ResourceT IO) -> Cookie -> IO Bool) -> IO (CookieJar, Response a)
-updateCookieJar response request' now cookie_jar cookie_filter = do
+updateMyCookieJar :: Response a -> Request (ResourceT IO) -> UTCTime -> CookieJar -> (Request (ResourceT IO) -> Cookie -> IO Bool) -> IO (CookieJar, Response a)
+updateMyCookieJar response request' now cookie_jar cookie_filter = do
   filtered_cookies <- filterM (cookie_filter request') $ catMaybes $ map (\ sc -> generateCookie sc request' now True) set_cookies
-  return (cookieJar' filtered_cookies, response {HC.responseHeaders = other_headers})
-  where (set_cookie_headers, other_headers) = partition ((== (mk $ fromString "Set-Cookie")) . fst) $ HC.responseHeaders response
+  return (cookieJar' filtered_cookies, response {responseHeaders = other_headers})
+  where (set_cookie_headers, other_headers) = partition ((== (mk $ fromString "Set-Cookie")) . fst) $ responseHeaders response
         set_cookie_data = map snd set_cookie_headers
         set_cookies = map parseSetCookie set_cookie_data
         cookieJar' = foldl (\ cj c -> insertCheckedCookie c cj True) cookie_jar
