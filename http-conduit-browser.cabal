@@ -8,7 +8,9 @@ synopsis:        Browser interface to the http-conduit package
 description:
     This package creates a monad representing things that browsers do,
     letting you elegantly describe a browsing session. This package wraps
-    the http-conduit package by Michael Snoyman.
+    the http-conduit package by Michael Snoyman. Note that the module will
+    be renamed to Network.HTTP.Conduit.Browser a month or so after release.
+    This is to give users migration time without name clashes.
 category:        Web, Conduit
 stability:       Stable
 cabal-version:   >= 1.8
@@ -32,7 +34,7 @@ library
                  , lifted-base
                  , mtl
                  , bytestring
-    exposed-modules: Network.HTTP.Conduit.Browser
+    exposed-modules: Network.HTTP.Conduit.Browser2
     ghc-options:     -Wall
 
 test-suite test

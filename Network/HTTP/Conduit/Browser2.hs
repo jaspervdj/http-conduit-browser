@@ -21,6 +21,9 @@
 -- you've described your session, you call 'browse' on your top-level BrowserAction to actually
 -- convert your actions into the ResourceT IO monad.
 --
+-- Note that the module will be renamed to Network.HTTP.Conduit.Browser a month or so after release.
+-- This is to give users migration time without name clashes.
+--
 -- Here is an example program:
 --
 -- > import qualified Data.ByteString as B
@@ -56,7 +59,7 @@
 -- >   out <- runResourceT $ browse man $ action r1 r2
 -- >   putStrLn $ UB.toString $ B.concat $ LB.toChunks $ responseBody out
 
-module Network.HTTP.Conduit.Browser
+module Network.HTTP.Conduit.Browser2
     ( BrowserState
     , BrowserAction
     , browse
