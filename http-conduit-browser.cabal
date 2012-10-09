@@ -18,12 +18,11 @@ build-type:      Simple
 homepage:        https://github.com/litherum/http-conduit/tree/http-conduit-browser
 extra-source-files: test/main.hs
 
-flag network-bytestring
-  default: False
+flag new-http-conduit
+  default: True
 
 library
     build-depends: base                  >= 4       && < 5
-                 , http-conduit          >= 1.6.1   && < 1.7
                  , data-default
                  , cookie
                  , utf8-string
@@ -35,6 +34,11 @@ library
                  , mtl
                  , bytestring
                  , containers
+    if flag(new-http-conduit)
+        build-depends: http-conduit          >= 1.7     && < 1.8
+        exposed-modules: Network.HTTP.Conduit.Browser
+    else
+        build-depends: http-conduit          >= 1.6.1   && < 1.7
     exposed-modules: Network.HTTP.Conduit.Browser2
     ghc-options:     -Wall
 
