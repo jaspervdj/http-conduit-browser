@@ -15,7 +15,7 @@ category:        Web, Conduit
 stability:       Stable
 cabal-version:   >= 1.8
 build-type:      Simple
-homepage:        https://github.com/litherum/http-conduit/tree/http-conduit-browser
+homepage:        https://github.com/litherum/http-conduit-browser
 extra-source-files: test/main.hs
 
 flag new-http-conduit
@@ -76,4 +76,4 @@ test-suite test
 
 source-repository head
   type:     git
-  location: git://github.com/litherum/http-conduit.git
+  location: git://github.com/litherum/http-conduit-browser.git
