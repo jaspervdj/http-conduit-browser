@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP, ScopedTypeVariables #-}
 -- | This module is designed to work similarly to the Network.Browser module in the HTTP package.
 -- The idea is that there are two new types defined: 'BrowserState' and 'BrowserAction'. The
 -- purpose of this module is to make it easy to describe a browsing session, including navigating
@@ -174,7 +174,7 @@ makeRequest request = do
     , maxRedirects = max_redirects
     , timeout = time_out
     , currentProxy  = current_proxy
-    , currentSocksProxy  = current_socks_proxy
+    , currentSocksProxy = current_socks_proxy
     , overrideHeaders = override_headers
     , browserCheckStatus = current_check_status
     } <- get
@@ -196,7 +196,7 @@ makeRequest request = do
               resp <- LE.catch (if max_redirects==0
                                   then (\(_,a,_) -> a) `fmap` performRequest request'
                                   else runRedirectionChain request' max_redirects [])
-                (\ e' -> retryHelper request' (retry_count - 1) max_redirects check_status (Just e'))
+                (\ (e'::HttpException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e')
               case check_status (responseStatus resp) (responseHeaders resp) of
                 Nothing -> return resp
                 Just e' -> retryHelper request' (retry_count - 1) max_redirects check_status (Just e')
@@ -384,19 +384,6 @@ withOverrideHeaders a b = do
   out <- b
   setOverrideHeaders current
   return out
--- | Function to check the status code. Note that this will run after all redirects are performed.
--- if Nothing uses Request's 'checkStatus'
-getCheckStatus    :: BrowserAction (Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException))
-getCheckStatus    = get >>= \ a -> return $ browserCheckStatus a
-setCheckStatus    :: Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException) -> BrowserAction ()
-setCheckStatus  b = get >>= \ a -> put a {browserCheckStatus = b}
-withCheckStatus   :: Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException) -> BrowserAction a -> BrowserAction a
-withCheckStatus a b = do
-  current <- getCheckStatus
-  setCheckStatus a
-  out <- b
-  setCheckStatus current
-  return out
 insertOverrideHeader :: HT.Header -> BrowserAction ()
 insertOverrideHeader (b, c) = get >>= \ a -> put a {overrideHeaders = Map.insert b c (overrideHeaders a)}
 deleteOverrideHeader :: HT.HeaderName -> BrowserAction ()
@@ -424,6 +411,19 @@ withUserAgent a b = do
   setUserAgent a
   out <- b
   setOverrideHeaders current
+  return out
+-- | Function to check the status code. Note that this will run after all redirects are performed.
+-- if Nothing uses Request's 'checkStatus'
+getCheckStatus    :: BrowserAction (Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException))
+getCheckStatus    = get >>= \ a -> return $ browserCheckStatus a
+setCheckStatus    :: Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException) -> BrowserAction ()
+setCheckStatus  b = get >>= \ a -> put a {browserCheckStatus = b}
+withCheckStatus   :: Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException) -> BrowserAction a -> BrowserAction a
+withCheckStatus a b = do
+  current <- getCheckStatus
+  setCheckStatus a
+  out <- b
+  setCheckStatus current
   return out
 
 -- | The active manager, managing the connection pool

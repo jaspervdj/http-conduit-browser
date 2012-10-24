@@ -1,9 +1,9 @@
 name:            http-conduit-browser
-version:         1.6.1
+version:         1.6.3
 license:         BSD3
 license-file:    LICENSE
 author:          Myles C. Maxfield <myles.maxfield@gmail.com>
-maintainer:      Myles C. Maxfield <myles.maxfield@gmail.com>
+maintainer:      kudah <kudahkukarek@gmail.com>
 synopsis:        Browser interface to the http-conduit package
 description:
     This package creates a monad representing things that browsers do,
@@ -15,8 +15,12 @@ category:        Web, Conduit
 stability:       Stable
 cabal-version:   >= 1.8
 build-type:      Simple
-homepage:        https://github.com/litherum/http-conduit-browser
 extra-source-files: test/main.hs
+
+homepage:        https://github.com/exbb2/http-conduit-browser
+source-repository head
+  type:     git
+  location: git://github.com/exbb2/http-conduit-browser.git
 
 flag new-http-conduit
   default: True
@@ -36,7 +40,7 @@ library
                  , containers
                  , socks
     if flag(new-http-conduit)
-        build-depends: http-conduit          >= 1.7     && < 1.8
+        build-depends: http-conduit          >= 1.7     && < 1.9
         exposed-modules: Network.HTTP.Conduit.Browser
     else
         build-depends: http-conduit          >= 1.6.1   && < 1.7
@@ -73,7 +77,3 @@ test-suite test
                  , warp
                  , wai
                  , socks
-
-source-repository head
-  type:     git
-  location: git://github.com/litherum/http-conduit-browser.git
