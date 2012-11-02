@@ -405,7 +405,7 @@ getUserAgent       = get >>= \ a -> return $ Map.lookup HT.hUserAgent (overrideH
 setUserAgent       :: Maybe BS.ByteString -> BrowserAction ()
 setUserAgent Nothing = deleteOverrideHeader HT.hUserAgent
 setUserAgent (Just b) = insertOverrideHeader (HT.hUserAgent, b)
-withUserAgent      :: Maybe BS.ByteString -> BrowserAction () -> BrowserAction ()
+withUserAgent      :: Maybe BS.ByteString -> BrowserAction a -> BrowserAction a
 withUserAgent a b = do
   current <- getOverrideHeaders
   setUserAgent a
