@@ -2,6 +2,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 import Test.Hspec
+import Control.Applicative
+import Control.Monad
 import Control.Exception (Exception, toException)
 import qualified Data.ByteString as S
 import Network.Wai hiding (requestBody)
@@ -185,6 +187,36 @@ main = do
                 if (lazyToStrict $ responseBody elbs) /= fromString "everything/digestible"
                      then error "Shouldn't have deleted Accept header!"
                      else return ()
+            it "withOverrideHeader: doesn't override additional headers" $ do
+                tid <- forkIO $ run 3012 app
+                request1 <- parseUrl "http://127.0.0.1:3012/accept"
+                request2 <- parseUrl "http://127.0.0.1:3012/useragent"
+                (bs1, bs2) <- withManager $ flip browse $ do
+                    insertOverrideHeader ("User-Agent", "another agent")
+                    withOverrideHeader ("User-Agent", "http-conduit") $
+                        insertOverrideHeader ("Accept", "everything/digestible")
+                    (,) <$> (lazyToStrict . responseBody <$> makeRequestLbs request1)
+                        <*> (lazyToStrict . responseBody <$> makeRequestLbs request2)
+                killThread tid
+                when (bs1 /= fromString "everything/digestible") $
+                    error "Shouldn't have deleted Accept header!"
+                when (bs2 /= "another agent") $
+                    error "Shouldn't have overriden user agent!"
+            it "withUserAgent: doesn't override additional headers" $ do
+                tid <- forkIO $ run 3012 app
+                request1 <- parseUrl "http://127.0.0.1:3012/accept"
+                request2 <- parseUrl "http://127.0.0.1:3012/useragent"
+                (bs1, bs2) <- withManager $ flip browse $ do
+                    setUserAgent $ Just "another agent"
+                    withUserAgent (Just "different agent") $
+                        insertOverrideHeader ("Accept", "everything/digestible")
+                    (,) <$> (lazyToStrict . responseBody <$> makeRequestLbs request1)
+                        <*> (lazyToStrict . responseBody <$> makeRequestLbs request2)
+                killThread tid
+                when (bs1 /= fromString "everything/digestible") $
+                    error "Shouldn't have deleted Accept header!"
+                when (bs2 /= "another agent") $
+                    error "Shouldn't have overriden user agent!"
             it "authorities get set correctly" $ do
                 tid <- forkIO $ run 3013 app
                 request <- parseUrl "http://127.0.0.1:3013/authorities"

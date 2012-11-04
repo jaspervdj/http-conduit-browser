@@ -96,6 +96,8 @@ module Network.HTTP.Conduit.Browser2
     , getOverrideHeaders
     , setOverrideHeaders
     , withOverrideHeaders
+    , getOverrideHeader
+    , setOverrideHeader
     , insertOverrideHeader
     , deleteOverrideHeader
     , withOverrideHeader
@@ -364,10 +366,10 @@ withCurrentSocksProxy a b = do
 -- | Specifies Headers that should be added to 'Request',
 -- these will override Headers already specified in 'requestHeaders'.
 --
--- > do insertOverrideHeader ("User-Agent", "http-conduit")
+-- > do insertOverrideHeader ("User-Agent", "rat")
 -- >    insertOverrideHeader ("Connection", "keep-alive")
--- >    makeRequest def{requestHeaders = [("User-Agent", "another agent"), ("Accept", "everything/digestible")]}
--- > > User-Agent: http-conduit
+-- >    makeRequest def{requestHeaders = [("User-Agent", "kitten"), ("Accept", "everything/digestible")]}
+-- > > User-Agent: rat
 -- > > Accept: everything/digestible
 -- > > Connection: keep-alive
 getOverrideHeaders :: BrowserAction HT.RequestHeaders
@@ -384,16 +386,21 @@ withOverrideHeaders a b = do
   out <- b
   setOverrideHeaders current
   return out
+getOverrideHeader :: HT.HeaderName -> BrowserAction (Maybe BS.ByteString)
+getOverrideHeader b = get >>= \ a -> return $ Map.lookup b (overrideHeaders a)
+setOverrideHeader :: HT.HeaderName -> Maybe BS.ByteString -> BrowserAction ()
+setOverrideHeader b Nothing = deleteOverrideHeader b
+setOverrideHeader b (Just c) = insertOverrideHeader (b, c)
 insertOverrideHeader :: HT.Header -> BrowserAction ()
 insertOverrideHeader (b, c) = get >>= \ a -> put a {overrideHeaders = Map.insert b c (overrideHeaders a)}
 deleteOverrideHeader :: HT.HeaderName -> BrowserAction ()
 deleteOverrideHeader b = get >>= \ a -> put a {overrideHeaders = Map.delete b (overrideHeaders a)}
 withOverrideHeader :: HT.Header -> BrowserAction a -> BrowserAction a
-withOverrideHeader a b = do
-  current <- getOverrideHeaders
-  insertOverrideHeader a
-  out <- b
-  setOverrideHeaders current
+withOverrideHeader (a,b) c = do
+  current <- getOverrideHeader a
+  insertOverrideHeader (a,b)
+  out <- c
+  setOverrideHeader a current
   return out
 -- | What string to report our user-agent as.
 -- if Nothing will not send user-agent unless one is specified in 'Request'
@@ -407,10 +414,10 @@ setUserAgent Nothing = deleteOverrideHeader HT.hUserAgent
 setUserAgent (Just b) = insertOverrideHeader (HT.hUserAgent, b)
 withUserAgent      :: Maybe BS.ByteString -> BrowserAction a -> BrowserAction a
 withUserAgent a b = do
-  current <- getOverrideHeaders
+  current <- getUserAgent
   setUserAgent a
   out <- b
-  setOverrideHeaders current
+  setUserAgent current
   return out
 -- | Function to check the status code. Note that this will run after all redirects are performed.
 -- if Nothing uses Request's 'checkStatus'
