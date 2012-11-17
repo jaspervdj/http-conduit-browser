@@ -63,12 +63,16 @@ module Network.HTTP.Conduit.Browser2
     ( BrowserState
     , BrowserAction
     , browse
+    , parseRelativeUrl
     , makeRequest
     , makeRequestLbs
     , defaultState
     , getBrowserState
     , setBrowserState
     , withBrowserState
+    , getLocation
+    , setLocation
+    , withLocation
     , getMaxRedirects
     , setMaxRedirects
     , withMaxRedirects
@@ -113,6 +117,7 @@ module Network.HTTP.Conduit.Browser2
   where
 
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as S8 (unpack)
 import qualified Data.ByteString.Lazy as L
 import Control.Monad.State
 import Control.Exception
@@ -124,6 +129,7 @@ import Prelude hiding (catch)
 import qualified Network.HTTP.Types as HT
 import qualified Network.HTTP.Types.Header as HT
 import Network.Socks5 (SocksConf)
+import Network.URI (URI (..), URIAuth (..), parseRelativeReference, relativeTo, uriToString)
 import Data.Time.Clock (getCurrentTime, UTCTime)
 import Data.CaseInsensitive (mk)
 import Data.ByteString.UTF8 (fromString)
@@ -135,7 +141,8 @@ import qualified Data.Map as Map
 import Network.HTTP.Conduit
 
 data BrowserState = BrowserState
-  { maxRedirects        :: Maybe Int
+  { currentLocation     :: Maybe URI
+  , maxRedirects        :: Maybe Int
   , maxRetryCount       :: Int
   , timeout             :: Maybe Int
   , authorities         :: Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString)
@@ -149,7 +156,8 @@ data BrowserState = BrowserState
   } 
 
 defaultState :: Manager -> BrowserState
-defaultState m = BrowserState { maxRedirects = Nothing
+defaultState m = BrowserState { currentLocation = Nothing
+                              , maxRedirects = Nothing
                               , maxRetryCount = 1
                               , timeout = Nothing
                               , authorities = \ _ -> Nothing
@@ -167,6 +175,13 @@ type BrowserAction = StateT BrowserState (ResourceT IO)
 -- | Do the browser action with the given manager
 browse :: Manager -> BrowserAction a -> ResourceT IO a
 browse m act = evalStateT act (defaultState m)
+
+-- | Convert a relative URL into a @Request@
+parseRelativeUrl :: String -> BrowserAction (Request m)
+parseRelativeUrl url = maybe err (parseUrl . use) . currentLocation =<< get
+  where err = throw $ InvalidUrlException url "Invalid URL"
+        uri = fromMaybe err $ parseRelativeReference url
+        use = flip (uriToString id) "" . fromMaybe err . relativeTo uri
 
 -- | Make a request, using all the state in the current BrowserState
 makeRequest :: Request (ResourceT IO) -> BrowserAction (Response (ResumableSource (ResourceT IO) BS.ByteString))
@@ -214,7 +229,9 @@ makeRequest request = do
                                               (evictExpiredCookies cookie_jar now) now
               res <- lift $ http request'' manager'
               (cookie_jar'', response) <- liftIO $ updateMyCookieJar res request'' now cookie_jar' cookie_filter
-              put $ s {cookieJar = cookie_jar''}
+              put $ s { cookieJar = cookie_jar''
+                      , currentLocation = Just $ getUri request''
+                      }
               return (request'', res, response)
         runRedirectionChain request' redirect_count ress
           | redirect_count == (-1) = throw . TooManyRedirects =<< mapM (liftIO . runResourceT . lbsResponse) ress
@@ -258,6 +275,19 @@ withBrowserState s a = do
   put s
   out <- a
   put current
+  return out
+
+-- | The last visited url (similar to the location bar in mainstream browsers).
+getLocation    :: BrowserAction (Maybe URI)
+getLocation    = get >>= \ a -> return $ currentLocation a
+setLocation    :: Maybe URI -> BrowserAction ()
+setLocation  b = get >>= \ a -> put a {currentLocation = b}
+withLocation   :: Maybe URI -> BrowserAction a -> BrowserAction a
+withLocation a b = do
+  current <- getLocation
+  setLocation a
+  out <- b
+  setLocation current
   return out
 
 -- | The number of redirects to allow.
@@ -438,3 +468,20 @@ getManager         :: BrowserAction Manager
 getManager         = get >>= \ a -> return $ manager a
 setManager         :: Manager -> BrowserAction ()
 setManager       b = get >>= \ a -> put a {manager = b}
+
+-- | Extract a 'URI' from the request.
+-- Canibalised from Network.HTTP.Conduit.Request, should be made visible there.
+getUri :: Request m' -> URI
+getUri req = URI
+    { uriScheme = if secure req
+                    then "https:"
+                    else "http:"
+    , uriAuthority = Just URIAuth
+        { uriUserInfo = ""
+        , uriRegName = S8.unpack $ host req
+        , uriPort = ':' : show (port req)
+        }
+    , uriPath = S8.unpack $ path req
+    , uriQuery = S8.unpack $ queryString req
+    , uriFragment = ""
+    }

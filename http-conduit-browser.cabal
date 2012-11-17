@@ -39,6 +39,7 @@ library
                  , bytestring
                  , containers
                  , socks
+                 , network               >= 2.3
     if flag(new-http-conduit)
         build-depends: http-conduit          >= 1.7     && < 1.9
         exposed-modules: Network.HTTP.Conduit.Browser
