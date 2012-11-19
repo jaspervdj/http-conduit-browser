@@ -81,3 +81,6 @@ test-suite test
                  , warp
                  , wai
                  , socks
+                 , network               >= 2.3
+                 , failure
+                 , monad-control

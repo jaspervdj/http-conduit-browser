@@ -283,6 +283,7 @@ withBrowserState s a = do
   return out
 
 -- | The last visited url (similar to the location bar in mainstream browsers).
+-- default: Nothing
 getLocation    :: Monad m => GenericBrowserAction m (Maybe URI)
 getLocation    = get >>= \ a -> return $ currentLocation a
 setLocation    :: Monad m => Maybe URI -> GenericBrowserAction m ()
