@@ -256,7 +256,7 @@ main = do
                 request <- parseUrl "http://127.0.0.1:3016/"
                 elbs <- try $ withManager $ \manager -> do
                     browse manager $ do
-                        setMaxRetryCount 1
+                        setMaxRetryCount 0
                         makeRequestLbs request
                 killThread tid
                 case elbs of
@@ -268,7 +268,7 @@ main = do
                 request <- parseUrl "http://127.0.0.1:3017/"
                 elbs <- withManager $ \manager -> do
                     browse manager $ do
-                        setMaxRetryCount 2
+                        setMaxRetryCount 1
                         makeRequestLbs request
                 killThread tid
                 if responseBody elbs /= success

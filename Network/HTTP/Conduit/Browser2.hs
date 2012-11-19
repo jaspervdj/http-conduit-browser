@@ -150,10 +150,10 @@ data BrowserState = BrowserState
 
 defaultState :: Manager -> BrowserState
 defaultState m = BrowserState { maxRedirects = Nothing
-                              , maxRetryCount = 1
+                              , maxRetryCount = 0
                               , timeout = Nothing
-                              , authorities = \ _ -> Nothing
-                              , cookieFilter = \ _ _ -> return True
+                              , authorities = const Nothing
+                              , cookieFilter = const $ const $ return True
                               , cookieJar = def
                               , currentProxy = Nothing
                               , currentSocksProxy = Nothing
@@ -191,7 +191,7 @@ makeRequest request = do
                (fromMaybe (checkStatus request) current_check_status)
                Nothing
   where retryHelper request' retry_count max_redirects check_status e
-          | retry_count == 0 = case e of
+          | retry_count < 0 = case e of
             Just e' -> throw e'
             Nothing -> throw TooManyRetries
           | otherwise = do
@@ -262,6 +262,7 @@ withBrowserState s a = do
 
 -- | The number of redirects to allow.
 -- if Nothing uses Request's 'redirectCount'
+-- default: Nothing
 getMaxRedirects    :: BrowserAction (Maybe Int)
 getMaxRedirects    = get >>= \ a -> return $ maxRedirects a
 setMaxRedirects    :: Maybe Int -> BrowserAction ()
@@ -274,6 +275,7 @@ withMaxRedirects a b = do
   setMaxRedirects current
   return out
 -- | The number of times to retry a failed connection
+-- default: 0
 getMaxRetryCount   :: BrowserAction Int
 getMaxRetryCount   = get >>= \ a -> return $ maxRetryCount a
 setMaxRetryCount   :: Int -> BrowserAction ()
@@ -287,6 +289,7 @@ withMaxRetryCount a b = do
   return out
 -- | Number of microseconds to wait for a response.
 -- if Nothing uses Request's 'responseTimeout'
+-- default: Nothing
 getTimeout         :: BrowserAction (Maybe Int)
 getTimeout         = get >>= \ a -> return $ timeout a
 setTimeout         :: Maybe Int -> BrowserAction ()
@@ -301,6 +304,7 @@ withTimeout    a b = do
 -- | A user-provided function that provides optional authorities.
 -- This function gets run on all requests before they get sent out.
 -- The output of this function is applied to the request.
+-- default: const Nothing
 getAuthorities     :: BrowserAction (Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString))
 getAuthorities     = get >>= \ a -> return $ authorities a
 setAuthorities     :: (Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString)) -> BrowserAction ()
@@ -314,6 +318,7 @@ withAuthorities a b = do
   return out
 -- | Each new Set-Cookie the browser encounters will pass through this filter.
 -- Only cookies that pass the filter (and are already valid) will be allowed into the cookie jar
+-- default: const $ const $ return True
 getCookieFilter    :: BrowserAction (Request (ResourceT IO) -> Cookie -> IO Bool)
 getCookieFilter    = get >>= \ a -> return $ cookieFilter a
 setCookieFilter    :: (Request (ResourceT IO) -> Cookie -> IO Bool) -> BrowserAction ()
@@ -339,6 +344,7 @@ withCookieJar a b = do
   return out
 -- | An optional proxy to send all requests through
 -- if Nothing uses Request's 'proxy'
+-- default: Nothing
 getCurrentProxy    :: BrowserAction (Maybe Proxy)
 getCurrentProxy    = get >>= \ a -> return $ currentProxy a
 setCurrentProxy    :: Maybe Proxy -> BrowserAction ()
@@ -352,6 +358,7 @@ withCurrentProxy a b = do
   return out
 -- | An optional SOCKS proxy to send all requests through
 -- if Nothing uses Request's 'socksProxy'
+-- default: Nothing
 getCurrentSocksProxy    :: BrowserAction (Maybe SocksConf)
 getCurrentSocksProxy    = get >>= \ a -> return $ currentSocksProxy a
 setCurrentSocksProxy    :: Maybe SocksConf -> BrowserAction ()
@@ -407,6 +414,8 @@ withOverrideHeader (a,b) c = do
 --
 -- > getUserAgent = lookup hUserAgent overrideHeaders
 -- > setUserAgent a = insertOverrideHeader (hUserAgent, a)
+--
+-- default: Just "http-conduit"
 getUserAgent       :: BrowserAction (Maybe BS.ByteString)
 getUserAgent       = get >>= \ a -> return $ Map.lookup HT.hUserAgent (overrideHeaders a)
 setUserAgent       :: Maybe BS.ByteString -> BrowserAction ()
@@ -421,6 +430,7 @@ withUserAgent a b = do
   return out
 -- | Function to check the status code. Note that this will run after all redirects are performed.
 -- if Nothing uses Request's 'checkStatus'
+-- default: Nothing
 getCheckStatus    :: BrowserAction (Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException))
 getCheckStatus    = get >>= \ a -> return $ browserCheckStatus a
 setCheckStatus    :: Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException) -> BrowserAction ()
@@ -432,7 +442,6 @@ withCheckStatus a b = do
   out <- b
   setCheckStatus current
   return out
-
 -- | The active manager, managing the connection pool
 getManager         :: BrowserAction Manager
 getManager         = get >>= \ a -> return $ manager a
