@@ -14,7 +14,7 @@
 --
 -- A special kind of modification of the current browser state is the action of making a HTTP
 -- request. This will do the request according to the params in the current BrowserState, as well
--- as modifying the current state with, for example, an updated cookie jar.
+-- as modifying the current state with, for example, an updated cookie jar and location.
 --
 -- To use this module, you would bind together a series of BrowserActions (This simulates the user
 -- clicking on links or using a settings dialogue etc.) to describe your browsing session. When
@@ -60,44 +60,106 @@
 -- >   putStrLn $ UB.toString $ B.concat $ LB.toChunks $ responseBody out
 
 module Network.HTTP.Conduit.Browser2
-    ( BrowserState
-    , BrowserAction
+    (
+    -- * Main
+      BrowserAction
     , GenericBrowserAction
     , browse
     , parseRelativeUrl
     , makeRequest
     , makeRequestLbs
+    -- * Browser state
+    , BrowserState
     , defaultState
     , getBrowserState
     , setBrowserState
     , withBrowserState
+    -- ** Manager
+    , Manager
+    , getManager
+    , setManager
+    -- ** Location
+    -- | The last visited url (similar to the location bar in mainstream browsers).
+    -- Location is updated on every request.
+    --
+    -- default: @Nothing@
     , getLocation
     , setLocation
     , withLocation
-    , getMaxRedirects
-    , setMaxRedirects
-    , withMaxRedirects
-    , getMaxRetryCount
-    , setMaxRetryCount
-    , withMaxRetryCount
-    , getTimeout
-    , setTimeout
-    , withTimeout
-    , getAuthorities
-    , setAuthorities
-    , withAuthorities
-    , getCookieFilter
-    , setCookieFilter
-    , withCookieFilter
+    -- ** Cookies
+    -- *** Cookie jar
+    -- | All the cookies!
     , getCookieJar
     , setCookieJar
     , withCookieJar
+    -- *** Cookie filter
+    -- | Each new Set-Cookie the browser encounters will pass through this filter.
+    -- Only cookies that pass the filter (and are already valid) will be allowed into the cookie jar
+    --
+    -- default: @const $ const $ return True@
+    , getCookieFilter
+    , setCookieFilter
+    , withCookieFilter
+    -- ** Proxies
+    -- *** HTTP
+    -- | An optional proxy to send all requests through
+    -- if Nothing uses Request's 'proxy'
+    --
+    -- default: @Nothing@
     , getCurrentProxy
     , setCurrentProxy
     , withCurrentProxy
+    -- *** SOCKS
+    -- | An optional SOCKS proxy to send all requests through
+    -- if Nothing uses Request's 'socksProxy'
+    --
+    -- default: @Nothing@
     , getCurrentSocksProxy
     , setCurrentSocksProxy
     , withCurrentSocksProxy
+    -- ** Redirects
+    -- | The number of redirects to allow.
+    -- if Nothing uses Request's 'redirectCount'
+    --
+    -- default: @Nothing@
+    , getMaxRedirects
+    , setMaxRedirects
+    , withMaxRedirects
+    -- ** Retries
+    -- | The number of times to retry a failed connection
+    --
+    -- default: @0@
+    , getMaxRetryCount
+    , setMaxRetryCount
+    , withMaxRetryCount
+    -- ** Timeout
+    -- | Number of microseconds to wait for a response.
+    -- if Nothing uses Request's 'responseTimeout'
+    --
+    -- default: @Nothing@
+    , getTimeout
+    , setTimeout
+    , withTimeout
+    -- ** Authorities
+    -- | A user-provided function that provides optional authorities.
+    -- This function gets run on all requests before they get sent out.
+    -- The output of this function is applied to the request.
+    --
+    -- default: @const Nothing@
+    , getAuthorities
+    , setAuthorities
+    , withAuthorities
+    -- ** Headers
+    -- *** Override headers
+    -- | Specifies Headers that should be added to 'Request',
+    -- these will override Headers already specified in 'requestHeaders'.
+    --
+    -- > do insertOverrideHeader ("User-Agent", "rat")
+    -- >    insertOverrideHeader ("Connection", "keep-alive")
+    -- >    makeRequest def{requestHeaders = [("User-Agent", "kitten"), ("Accept", "everything/digestible")]}
+    -- > > User-Agent: rat
+    -- > > Accept: everything/digestible
+    -- > > Connection: keep-alive
     , getOverrideHeaders
     , setOverrideHeaders
     , withOverrideHeaders
@@ -106,14 +168,25 @@ module Network.HTTP.Conduit.Browser2
     , insertOverrideHeader
     , deleteOverrideHeader
     , withOverrideHeader
+    -- *** User agent
+    -- | What string to report our user-agent as.
+    -- if Nothing will not send user-agent unless one is specified in 'Request'
+    --
+    -- > getUserAgent = lookup "User-Agent" overrideHeaders
+    -- > setUserAgent a = insertOverrideHeader ("User-Agent", a)
+    --
+    -- default: @Just \"http-conduit\"@
     , getUserAgent
     , setUserAgent
     , withUserAgent
+    -- ** Error handling
+    -- | Function to check the status code. Note that this will run after all redirects are performed.
+    -- if Nothing uses Request's 'checkStatus'
+    --
+    -- default: @Nothing@
     , getCheckStatus
     , setCheckStatus
     , withCheckStatus
-    , getManager
-    , setManager
     )
   where
 
@@ -140,9 +213,9 @@ import Data.Maybe (catMaybes, fromMaybe)
 import qualified Data.Map as Map
 
 import Network.HTTP.Conduit
-import Control.Monad.Trans.Resource ( liftResourceT )
-import Control.Monad.Trans.Control ( MonadBaseControl )
-import Control.Failure ( Failure )
+import Control.Monad.Trans.Resource (liftResourceT)
+import Control.Monad.Trans.Control (MonadBaseControl)
+import Control.Failure (Failure)
 
 data BrowserState = BrowserState
   { currentLocation     :: Maybe URI
@@ -175,14 +248,17 @@ defaultState m = BrowserState { currentLocation = Nothing
                               }
 
 type BrowserAction = GenericBrowserAction (ResourceT IO)
+
 type GenericBrowserAction m = StateT BrowserState m
 
 -- | Do the browser action with the given manager
 browse :: Monad m => Manager -> GenericBrowserAction m a -> m a
 browse m act = evalStateT act (defaultState m)
 
--- | Convert a relative URL into a 'Request'
-parseRelativeUrl :: (Failure HttpException m) => String -> GenericBrowserAction m (Request m')
+-- | Convert an URL relative to current Location into a 'Request'
+--
+-- Will throw 'InvalidUrlException' on parse failures or if your Location is 'Nothing' (e.g. you haven't made any requests before)
+parseRelativeUrl :: Failure HttpException m => String -> GenericBrowserAction m (Request m')
 parseRelativeUrl url = maybe err (parseUrl . use) . currentLocation =<< get
   where err = throw $ InvalidUrlException url "Invalid URL"
         uri = fromMaybe err $ parseRelativeReference url
@@ -253,6 +329,12 @@ makeRequest request = do
           Just (user, pass) -> applyBasicAuth user pass request'
           Nothing -> request'
 
+-- | Make a request and pack the result as a lazy bytestring.
+--
+-- Note: Even though this function returns a lazy bytestring, it does not
+-- utilize lazy I/O, and therefore the entire response body will live in memory.
+-- If you want constant memory usage, you'll need to use the conduit package and
+-- 'makeRequest' directly. 
 makeRequestLbs :: (MonadBaseControl IO m, MonadResource m) => Request (ResourceT IO) -> GenericBrowserAction m (Response L.ByteString)
 makeRequestLbs = liftIO . runResourceT . lbsResponse <=< makeRequest
 
@@ -282,8 +364,6 @@ withBrowserState s a = do
   put current
   return out
 
--- | The last visited url (similar to the location bar in mainstream browsers).
--- default: Nothing
 getLocation    :: Monad m => GenericBrowserAction m (Maybe URI)
 getLocation    = get >>= \ a -> return $ currentLocation a
 setLocation    :: Monad m => Maybe URI -> GenericBrowserAction m ()
@@ -296,9 +376,6 @@ withLocation a b = do
   setLocation current
   return out
 
--- | The number of redirects to allow.
--- if Nothing uses Request's 'redirectCount'
--- default: Nothing
 getMaxRedirects    :: Monad m => GenericBrowserAction m (Maybe Int)
 getMaxRedirects    = get >>= \ a -> return $ maxRedirects a
 setMaxRedirects    :: Monad m => Maybe Int -> GenericBrowserAction m ()
@@ -310,8 +387,7 @@ withMaxRedirects a b = do
   out <- b
   setMaxRedirects current
   return out
--- | The number of times to retry a failed connection
--- default: 0
+
 getMaxRetryCount   :: Monad m => GenericBrowserAction m Int
 getMaxRetryCount   = get >>= \ a -> return $ maxRetryCount a
 setMaxRetryCount   :: Monad m => Int -> GenericBrowserAction m ()
@@ -323,9 +399,7 @@ withMaxRetryCount a b = do
   out <- b
   setMaxRetryCount current
   return out
--- | Number of microseconds to wait for a response.
--- if Nothing uses Request's 'responseTimeout'
--- default: Nothing
+
 getTimeout         :: Monad m => GenericBrowserAction m (Maybe Int)
 getTimeout         = get >>= \ a -> return $ timeout a
 setTimeout         :: Monad m => Maybe Int -> GenericBrowserAction m ()
@@ -337,10 +411,7 @@ withTimeout    a b = do
   out <- b
   setTimeout current
   return out
--- | A user-provided function that provides optional authorities.
--- This function gets run on all requests before they get sent out.
--- The output of this function is applied to the request.
--- default: const Nothing
+
 getAuthorities     :: Monad m => GenericBrowserAction m (Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString))
 getAuthorities     = get >>= \ a -> return $ authorities a
 setAuthorities     :: Monad m => (Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString)) -> GenericBrowserAction m ()
@@ -352,9 +423,7 @@ withAuthorities a b = do
   out <- b
   setAuthorities current
   return out
--- | Each new Set-Cookie the browser encounters will pass through this filter.
--- Only cookies that pass the filter (and are already valid) will be allowed into the cookie jar
--- default: const $ const $ return True
+
 getCookieFilter    :: Monad m => GenericBrowserAction m (Request (ResourceT IO) -> Cookie -> IO Bool)
 getCookieFilter    = get >>= \ a -> return $ cookieFilter a
 setCookieFilter    :: Monad m => (Request (ResourceT IO) -> Cookie -> IO Bool) -> GenericBrowserAction m ()
@@ -366,7 +435,7 @@ withCookieFilter a b = do
   out <- b
   setCookieFilter current
   return out
--- | All the cookies!
+
 getCookieJar       :: Monad m => GenericBrowserAction m CookieJar
 getCookieJar       = get >>= \ a -> return $ cookieJar a
 setCookieJar       :: Monad m => CookieJar -> GenericBrowserAction m ()
@@ -378,9 +447,7 @@ withCookieJar a b = do
   out <- b
   setCookieJar current
   return out
--- | An optional proxy to send all requests through
--- if Nothing uses Request's 'proxy'
--- default: Nothing
+
 getCurrentProxy    :: Monad m => GenericBrowserAction m (Maybe Proxy)
 getCurrentProxy    = get >>= \ a -> return $ currentProxy a
 setCurrentProxy    :: Monad m => Maybe Proxy -> GenericBrowserAction m ()
@@ -392,9 +459,7 @@ withCurrentProxy a b = do
   out <- b
   setCurrentProxy current
   return out
--- | An optional SOCKS proxy to send all requests through
--- if Nothing uses Request's 'socksProxy'
--- default: Nothing
+
 getCurrentSocksProxy    :: Monad m => GenericBrowserAction m (Maybe SocksConf)
 getCurrentSocksProxy    = get >>= \ a -> return $ currentSocksProxy a
 setCurrentSocksProxy    :: Monad m => Maybe SocksConf -> GenericBrowserAction m ()
@@ -406,15 +471,7 @@ withCurrentSocksProxy a b = do
   out <- b
   setCurrentSocksProxy current
   return out
--- | Specifies Headers that should be added to 'Request',
--- these will override Headers already specified in 'requestHeaders'.
---
--- > do insertOverrideHeader ("User-Agent", "rat")
--- >    insertOverrideHeader ("Connection", "keep-alive")
--- >    makeRequest def{requestHeaders = [("User-Agent", "kitten"), ("Accept", "everything/digestible")]}
--- > > User-Agent: rat
--- > > Accept: everything/digestible
--- > > Connection: keep-alive
+
 getOverrideHeaders :: Monad m => GenericBrowserAction m HT.RequestHeaders
 getOverrideHeaders = get >>= \ a -> return $ Map.toList $ overrideHeaders a
 setOverrideHeaders :: Monad m => HT.RequestHeaders -> GenericBrowserAction m ()
@@ -445,13 +502,7 @@ withOverrideHeader (a,b) c = do
   out <- c
   setOverrideHeader a current
   return out
--- | What string to report our user-agent as.
--- if Nothing will not send user-agent unless one is specified in 'Request'
---
--- > getUserAgent = lookup hUserAgent overrideHeaders
--- > setUserAgent a = insertOverrideHeader (hUserAgent, a)
---
--- default: Just "http-conduit"
+
 getUserAgent       :: Monad m => GenericBrowserAction m (Maybe BS.ByteString)
 getUserAgent       = get >>= \ a -> return $ Map.lookup HT.hUserAgent (overrideHeaders a)
 setUserAgent       :: Monad m => Maybe BS.ByteString -> GenericBrowserAction m ()
@@ -464,9 +515,7 @@ withUserAgent a b = do
   out <- b
   setUserAgent current
   return out
--- | Function to check the status code. Note that this will run after all redirects are performed.
--- if Nothing uses Request's 'checkStatus'
--- default: Nothing
+
 getCheckStatus    :: Monad m => GenericBrowserAction m (Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException))
 getCheckStatus    = get >>= \ a -> return $ browserCheckStatus a
 setCheckStatus    :: Monad m => Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException) -> GenericBrowserAction m ()
@@ -478,7 +527,7 @@ withCheckStatus a b = do
   out <- b
   setCheckStatus current
   return out
--- | The active manager, managing the connection pool
+
 getManager         :: Monad m => GenericBrowserAction m Manager
 getManager         = get >>= \ a -> return $ manager a
 setManager         :: Monad m => Manager -> GenericBrowserAction m ()
