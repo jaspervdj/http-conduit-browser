@@ -318,3 +318,39 @@ main = do
                 case elbs of
                     Left TestException -> return ()
                     _ -> error "Should have thrown an exception!"
+            it "updates location" $ do
+                tid <- forkIO $ run 3014 app
+                request <- parseUrl "http://127.0.0.1:3014/"
+                loc <- withManager $ \manager -> do
+                    browse manager $ do
+                        _ <- makeRequestLbs request
+                        getLocation
+                killThread tid
+                if (maybe "" show loc) /= "http://127.0.0.1:3014/"
+                     then error "Should have set the location"
+                     else return ()
+            it "updates location while following redirections" $ do
+                tid <- forkIO $ run 3014 app
+                request <- parseUrl "http://127.0.0.1:3014/redir1"
+                loc <- withManager $ \manager -> do
+                    browse manager $ do
+                        setMaxRedirects $ Just 2
+                        _ <- makeRequestLbs request
+                        getLocation
+                killThread tid
+                if (maybe "" show loc) /= "http://127.0.0.1:3014/redir3"
+                     then error "Should have updated the location when following 2 redirects"
+                     else return ()
+            it "follows relative references" $ do
+                tid <- forkIO $ run 3014 app
+                request1 <- parseUrl "http://127.0.0.1:3014/"
+                (elbs1, elbs2) <- withManager $ \manager -> do
+                    browse manager $ do
+                        lbs1 <- makeRequestLbs request1
+                        request2 <- parseRelativeUrl "redir3"
+                        lbs2 <- makeRequestLbs request2
+                        return (lbs1, lbs2)
+                killThread tid
+                if (lazyToStrict $ responseBody elbs1) /= fromString "homepage" || (lazyToStrict $ responseBody elbs2) /= dummy
+                     then error "Should have followed the relative reference"
+                     else return ()

@@ -39,6 +39,10 @@ library
                  , bytestring
                  , containers
                  , socks
+                 , network               >= 2.3
+                 , failure
+                 , monad-control
+                 , resourcet             >= 0.3    && < 0.5
     if flag(new-http-conduit)
         build-depends: http-conduit          >= 1.7     && < 1.9
         exposed-modules: Network.HTTP.Conduit.Browser
@@ -77,3 +81,6 @@ test-suite test
                  , warp
                  , wai
                  , socks
+                 , network               >= 2.3
+                 , failure
+                 , monad-control
