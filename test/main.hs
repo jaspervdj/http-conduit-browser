@@ -9,7 +9,7 @@ import qualified Data.ByteString as S
 import Network.Wai hiding (requestBody)
 import Network.Wai.Handler.Warp (run)
 import Network.HTTP.Conduit
-import Network.HTTP.Conduit.Browser2
+import Network.HTTP.Conduit.Browser
 import Data.ByteString.Base64 (encode)
 import Data.Typeable (Typeable)
 import Control.Concurrent (forkIO, killThread)
