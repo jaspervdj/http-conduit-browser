@@ -288,8 +288,8 @@ makeRequest request = do
                Nothing
   where retryHelper request' retry_count max_redirects check_status e
           | retry_count < 0 = case e of
-            Just e' -> throw e'
-            Nothing -> throw TooManyRetries
+            Just e' -> LE.throwIO e'
+            Nothing -> LE.throwIO TooManyRetries
           | otherwise = do
               resp <- LE.catch (if max_redirects==0
                                   then (\(_,a,_) -> a) `fmap` performRequest request'
@@ -315,14 +315,14 @@ makeRequest request = do
                       }
               return (request'', res, response)
         runRedirectionChain request' redirect_count ress
-          | redirect_count == (-1) = throw . TooManyRedirects =<< mapM (liftIO . runResourceT . lbsResponse) ress
+          | redirect_count == (-1) = LE.throwIO . TooManyRedirects =<< mapM (liftResourceT . lbsResponse) ress
           | otherwise = do
               (request'', res, response) <- performRequest request'
               let code = HT.statusCode (responseStatus response)
               if code >= 300 && code < 400
                 then do request''' <- case getRedirectedRequest request'' (responseHeaders response) code of
                             Just a -> return a
-                            Nothing -> throw . UnparseableRedirect =<< (liftIO $ runResourceT $ lbsResponse response)
+                            Nothing -> LE.throwIO . UnparseableRedirect =<< (liftResourceT $ lbsResponse response)
                         -- Canibalised from Network.HTTP.Conduit, should be made visible there.
                         -- Allow the original connection to return to the
                         -- connection pool immediately by flushing the body.
@@ -351,7 +351,7 @@ makeRequest request = do
 -- If you want constant memory usage, you'll need to use the conduit package and
 -- 'makeRequest' directly. 
 makeRequestLbs :: (MonadBaseControl IO m, MonadResource m) => Request (ResourceT IO) -> GenericBrowserAction m (Response L.ByteString)
-makeRequestLbs = makeRequest >=> liftResourceT . lbsResponse
+makeRequestLbs = liftResourceT . lbsResponse <=< makeRequest
 
 applyOverrideHeaders :: Map.Map HT.HeaderName BS.ByteString -> Request a -> Request a
 applyOverrideHeaders ov request' = request' {requestHeaders = x $ requestHeaders request'}
