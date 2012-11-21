@@ -188,12 +188,14 @@ module Network.HTTP.Conduit.Browser
   where
 
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as S8 (unpack)
+import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
 import Control.Monad.State
 import Control.Exception
 import qualified Control.Exception.Lifted as LE
 import Data.Conduit
+import qualified Data.Conduit.Binary as CB
+import Data.Conduit.List (sinkNull)
 #if !MIN_VERSION_base(4,6,0)
 import Prelude hiding (catch)
 #endif
@@ -205,6 +207,7 @@ import Data.Time.Clock (getCurrentTime, UTCTime)
 import Data.CaseInsensitive (mk)
 import Data.ByteString.UTF8 (fromString)
 import Data.List (partition)
+import qualified Data.String as IsString (fromString)
 import Web.Cookie (parseSetCookie)
 import Data.Maybe (catMaybes, fromMaybe)
 import qualified Data.Map as Map
@@ -320,6 +323,21 @@ makeRequest request = do
                 then do request''' <- case getRedirectedRequest request'' (responseHeaders response) code of
                             Just a -> return a
                             Nothing -> throw . UnparseableRedirect =<< (liftIO $ runResourceT $ lbsResponse response)
+                        -- Canibalised from Network.HTTP.Conduit, should be made visible there.
+                        -- Allow the original connection to return to the
+                        -- connection pool immediately by flushing the body.
+                        -- If the response body is too large, don't flush, but
+                        -- instead just close the connection.
+                        let maxFlush = 1024
+                            readMay bs =
+                                case S8.readInt bs of
+                                    Just (i, bs') | BS.null bs' -> Just i
+                                    _ -> Nothing
+                            sink =
+                                case lookup (IsString.fromString "content-length") (responseHeaders res) >>= readMay of
+                                    Just i | i > maxFlush -> return ()
+                                    _ -> CB.isolate maxFlush =$ sinkNull
+                        liftResourceT $ responseBody res $$+- sink
                         runRedirectionChain request''' (redirect_count - 1) (res:ress)
                 else return res
         applyAuthorities auths request' = case auths request' of
