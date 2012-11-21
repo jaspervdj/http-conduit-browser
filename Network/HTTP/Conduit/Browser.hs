@@ -262,7 +262,12 @@ parseRelativeUrl :: Failure HttpException m => String -> GenericBrowserAction m 
 parseRelativeUrl url = maybe err (parseUrl . use) . currentLocation =<< get
   where err = throw $ InvalidUrlException url "Invalid URL"
         uri = fromMaybe err $ parseRelativeReference url
-        use = flip (uriToString id) "" . fromMaybe err . relativeTo uri
+        use = flip (uriToString id) "" . fromMaybe err . relativeTo' uri
+#if MIN_VERSION_network(2,4,0)
+        relativeTo' x = Just . relativeTo x
+#else
+        relativeTo' = relativeTo
+#endif
 
 -- | Make a request, using all the state in the current BrowserState
 makeRequest :: (MonadBaseControl IO m, MonadResource m) => Request (ResourceT IO) -> GenericBrowserAction m (Response (ResumableSource (ResourceT IO) BS.ByteString))
