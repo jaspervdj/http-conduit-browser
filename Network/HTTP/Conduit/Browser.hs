@@ -333,7 +333,7 @@ makeRequest request = do
 -- If you want constant memory usage, you'll need to use the conduit package and
 -- 'makeRequest' directly. 
 makeRequestLbs :: (MonadBaseControl IO m, MonadResource m) => Request (ResourceT IO) -> GenericBrowserAction m (Response L.ByteString)
-makeRequestLbs = liftIO . runResourceT . lbsResponse <=< makeRequest
+makeRequestLbs = makeRequest >=> liftResourceT . lbsResponse
 
 applyOverrideHeaders :: Map.Map HT.HeaderName BS.ByteString -> Request a -> Request a
 applyOverrideHeaders ov request' = request' {requestHeaders = x $ requestHeaders request'}
