@@ -213,6 +213,9 @@ import Data.Maybe (catMaybes, fromMaybe)
 import qualified Data.Map as Map
 
 import Network.HTTP.Conduit
+#if MIN_VERSION_http_conduit(1,8,5)
+import Network.HTTP.Conduit.Internal (httpRedirect)
+#endif
 import Control.Monad.Trans.Resource (liftResourceT)
 import Control.Monad.Trans.Control (MonadBaseControl)
 import Control.Failure (Failure)
@@ -303,6 +306,9 @@ makeRequest request = do
               case check_status (responseStatus resp) (responseHeaders resp) of
                 Nothing -> return resp
                 Just e' -> retryHelper request' (retry_count - 1) max_redirects check_status (Just e')
+        applyAuthorities auths request' = case auths request' of
+          Just (user, pass) -> applyBasicAuth user pass request'
+          Nothing -> request'
         performRequest request' = do
               s@(BrowserState { manager = manager'
                               , authorities = auths
@@ -319,35 +325,43 @@ makeRequest request = do
                       , currentLocation = Just $ getUri request''
                       }
               return (request'', res, response)
+#if MIN_VERSION_http_conduit(1,8,5)
+        runRedirectionChain request' redirect_count _
+          = httpRedirect
+                redirect_count
+                (\request' -> do
+                    (request'', res, response) <- performRequest request'
+                    let mreq = getRedirectedRequest request'' (responseHeaders response) (HT.statusCode (responseStatus response))
+                    return (res, mreq))
+                (liftResourceT . lbsResponse)
+                request'
+#else
         runRedirectionChain request' redirect_count ress
           | redirect_count == (-1) = LE.throwIO . TooManyRedirects =<< mapM (liftResourceT . lbsResponse) ress
           | otherwise = do
               (request'', res, response) <- performRequest request'
-              let code = HT.statusCode (responseStatus response)
-              if code >= 300 && code < 400
-                then do request''' <- case getRedirectedRequest request'' (responseHeaders response) code of
-                            Just a -> return a
-                            Nothing -> LE.throwIO . UnparseableRedirect =<< (liftResourceT $ lbsResponse response)
-                        -- Canibalised from Network.HTTP.Conduit, should be made visible there.
-                        -- Allow the original connection to return to the
-                        -- connection pool immediately by flushing the body.
-                        -- If the response body is too large, don't flush, but
-                        -- instead just close the connection.
-                        let maxFlush = 1024
-                            readMay bs =
-                                case S8.readInt bs of
-                                    Just (i, bs') | BS.null bs' -> Just i
-                                    _ -> Nothing
-                            sink =
-                                case lookup (IsString.fromString "content-length") (responseHeaders res) >>= readMay of
-                                    Just i | i > maxFlush -> return ()
-                                    _ -> CB.isolate maxFlush =$ sinkNull
-                        liftResourceT $ responseBody res $$+- sink
-                        runRedirectionChain request''' (redirect_count - 1) (res:ress)
-                else return res
-        applyAuthorities auths request' = case auths request' of
-          Just (user, pass) -> applyBasicAuth user pass request'
-          Nothing -> request'
+              case getRedirectedRequest request'' (responseHeaders response) (HT.statusCode (responseStatus response)) of
+                Nothing -> return res
+                Just request''' -> do
+                  -- Canibalised from Network.HTTP.Conduit, should be made visible there.
+                  -- Allow the original connection to return to the
+                  -- connection pool immediately by flushing the body.
+                  -- If the response body is too large, don't flush, but
+                  -- instead just close the connection.
+                  let maxFlush = 1024
+                      readMay bs =
+                          case S8.readInt bs of
+                              Just (i, bs') | BS.null bs' -> Just i
+                              _ -> Nothing
+                      sink =
+                          case lookup (IsString.fromString "content-length") (responseHeaders res) >>= readMay of
+                              Just i | i > maxFlush -> return ()
+                              _ -> CB.isolate maxFlush =$ sinkNull
+                  liftResourceT $ responseBody res $$+- sink
+
+                  -- And now perform the actual redirect
+                  runRedirectionChain request''' (redirect_count - 1) (res:ress)
+#endif
 
 -- | Make a request and pack the result as a lazy bytestring.
 --
