@@ -333,7 +333,7 @@ makeRequest request = do
                     (request'', res, response) <- performRequest request'
                     let mreq = getRedirectedRequest request'' (responseHeaders response) (HT.statusCode (responseStatus response))
                     return (res, mreq))
-                (liftResourceT . lbsResponse)
+                liftResourceT
                 request'
 #else
         runRedirectionChain request' redirect_count ress
