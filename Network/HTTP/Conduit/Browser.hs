@@ -194,7 +194,9 @@ module Network.HTTP.Conduit.Browser
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as S8
 import qualified Data.ByteString.Lazy as L
-import Control.Monad.State
+import Control.Monad
+import Control.Monad.IO.Class
+import Control.Monad.Trans.State
 import Control.Exception
 import qualified Control.Exception.Lifted as LE
 import Data.Conduit
@@ -209,16 +211,15 @@ import Network.Socks5 (SocksConf)
 import Network.URI (URI (..), URIAuth (..), parseRelativeReference, relativeTo, uriToString)
 import Data.Time.Clock (getCurrentTime, UTCTime)
 import Data.CaseInsensitive (mk)
-import Data.ByteString.UTF8 (fromString)
 import Data.List (partition)
-import qualified Data.String as IsString (fromString)
+import Data.String (fromString)
 import Web.Cookie (parseSetCookie)
 import Data.Maybe (catMaybes, fromMaybe)
 import qualified Data.Map as Map
 
 import Network.HTTP.Conduit
 #if MIN_VERSION_http_conduit(1,8,5)
-import Network.HTTP.Conduit.Internal (httpRedirect)
+import Network.HTTP.Conduit.Internal (httpRedirect, getUri, setUri)
 #endif
 import Control.Monad.Trans.Resource (liftResourceT)
 import Control.Monad.Trans.Control (MonadBaseControl)
@@ -266,14 +267,19 @@ browse m act = evalStateT act (defaultState m)
 --
 -- Will throw 'InvalidUrlException' on parse failures or if your Location is 'Nothing' (e.g. you haven't made any requests before)
 parseRelativeUrl :: Failure HttpException m => String -> GenericBrowserAction m (Request m')
-parseRelativeUrl url = maybe err (parseUrl . use) . currentLocation =<< get
+parseRelativeUrl url = maybe err (parse . use) =<< gets currentLocation
   where err = throw $ InvalidUrlException url "Invalid URL"
         uri = fromMaybe err $ parseRelativeReference url
-        use = flip (uriToString id) "" . fromMaybe err . relativeTo' uri
+        use = fromMaybe err . relativeTo' uri
 #if MIN_VERSION_network(2,4,0)
         relativeTo' x = Just . relativeTo x
 #else
         relativeTo' = relativeTo
+#endif
+#if MIN_VERSION_http_conduit(1,8,5)
+        parse = setUri def
+#else
+        parse = parseUrl . flip (uriToString id) ""
 #endif
 
 -- | Make a request, using all the state in the current BrowserState
@@ -358,7 +364,7 @@ makeRequest request = do
                               Just (i, bs') | BS.null bs' -> Just i
                               _ -> Nothing
                       sink =
-                          case lookup (IsString.fromString "content-length") (responseHeaders res) >>= readMay of
+                          case lookup (fromString "content-length") (responseHeaders res) >>= readMay of
                               Just i | i > maxFlush -> return ()
                               _ -> CB.isolate maxFlush =$ sinkNull
                   liftResourceT $ responseBody res $$+- sink
@@ -576,6 +582,7 @@ getManager         = get >>= \ a -> return $ manager a
 setManager         :: Monad m => Manager -> GenericBrowserAction m ()
 setManager       b = get >>= \ a -> put a {manager = b}
 
+#if !MIN_VERSION_http_conduit(1,8,5)
 -- | Extract a 'URI' from the request.
 -- Canibalised from Network.HTTP.Conduit.Request, should be made visible there.
 getUri :: Request m' -> URI
@@ -592,3 +599,4 @@ getUri req = URI
     , uriQuery = S8.unpack $ queryString req
     , uriFragment = ""
     }
+#endif

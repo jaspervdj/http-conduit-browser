@@ -25,13 +25,12 @@ library
                  , http-conduit          >= 1.7.0
                  , data-default
                  , cookie
-                 , utf8-string
                  , case-insensitive
                  , time
                  , http-types
                  , conduit
                  , lifted-base
-                 , mtl
+                 , transformers
                  , bytestring
                  , containers
                  , socks
@@ -59,7 +58,6 @@ test-suite test
                  , conduit
                  , case-insensitive
                  , containers
-                 , utf8-string
                  , transformers
                  , resourcet
                  , network-conduit
@@ -68,7 +66,6 @@ test-suite test
                  , base64-bytestring
                  , cookie
                  , time
-                 , mtl
                  , warp
                  , wai
                  , socks

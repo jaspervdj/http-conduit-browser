@@ -6,6 +6,8 @@ import Control.Applicative
 import Control.Monad
 import Control.Exception (Exception, toException)
 import qualified Data.ByteString as S
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import Network.Wai hiding (requestBody)
 import Network.Wai.Handler.Warp (run)
 import Network.HTTP.Conduit
@@ -15,7 +17,6 @@ import Data.Typeable (Typeable)
 import Control.Concurrent (forkIO, killThread)
 import Network.HTTP.Types
 import Control.Exception.Lifted (try)
-import Data.ByteString.UTF8 (fromString)
 import Data.CaseInsensitive (mk)
 import qualified Data.ByteString.Lazy as L
 import Data.IORef
@@ -27,6 +28,9 @@ data TestException = TestException
     deriving (Show, Typeable)
 
 instance Exception TestException
+
+utf8String :: String -> S.ByteString
+utf8String = TE.encodeUtf8 . T.pack
 
 strictToLazy :: S.ByteString -> L.ByteString
 strictToLazy = L.fromChunks . replicate 1
@@ -71,12 +75,12 @@ app req =
         ["redir3"] -> return $ responseLBS status200 [] $ strictToLazy dummy
         _ -> return $ responseLBS status404 [] "not found"
 
-    where tastyCookie = (mk (fromString "Set-Cookie"), fromString "flavor=chocolate-chip;")
+    where tastyCookie = (mk (utf8String "Set-Cookie"), utf8String "flavor=chocolate-chip;")
           getHeader s = strictToLazy $ case lookup s $ Network.Wai.requestHeaders req of
                             Just a -> a
                             Nothing -> S.empty
-          redir2 = (mk (fromString "Location"), fromString "/redir2")
-          redir3 = (mk (fromString "Location"), fromString "/redir3")
+          redir2 = (mk (utf8String "Location"), utf8String "/redir2")
+          redir3 = (mk (utf8String "Location"), utf8String "/redir3")
 
 main :: IO ()
 main = do
@@ -92,7 +96,7 @@ main = do
                         _ <- makeRequestLbs request1
                         makeRequestLbs request2
                 killThread tid
-                if (lazyToStrict $ responseBody elbs) /= fromString "flavor=chocolate-chip"
+                if (lazyToStrict $ responseBody elbs) /= utf8String "flavor=chocolate-chip"
                      then error "Should have gotten the cookie back!"
                      else return ()
             it "cookie filter can deny cookies" $ do
@@ -123,7 +127,7 @@ main = do
                         return (elbs1, elbs2)
                 killThread tid
                 if (((lazyToStrict $ responseBody elbs1) /= S.empty) ||
-                    ((lazyToStrict $ responseBody elbs2) /= fromString "flavor=chocolate-chip"))
+                    ((lazyToStrict $ responseBody elbs2) /= utf8String "flavor=chocolate-chip"))
                      then error "Cookie jar got garbled up!"
                      else return ()
             it "user agent sets correctly" $ do
@@ -131,10 +135,10 @@ main = do
                 request <- parseUrl "http://127.0.0.1:3012/useragent"
                 elbs <- withManager $ \manager -> do
                     browse manager $ do
-                        setUserAgent $ Just $ fromString "abcd"
+                        setUserAgent $ Just $ utf8String "abcd"
                         makeRequestLbs request
                 killThread tid
-                if (lazyToStrict $ responseBody elbs) /= fromString "abcd"
+                if (lazyToStrict $ responseBody elbs) /= utf8String "abcd"
                      then error "Should have gotten the user agent back!"
                      else return ()
             it "user agent overrides" $ do
@@ -142,13 +146,13 @@ main = do
                 request <- parseUrl "http://127.0.0.1:3012/useragent"
                 elbs <- withManager $ \manager -> do
                     browse manager $ do
-                        setUserAgent $ Just $ fromString "abcd"
+                        setUserAgent $ Just $ utf8String "abcd"
                         makeRequestLbs request{Network.HTTP.Conduit.requestHeaders = [(hUserAgent, "bwahaha")]}
                 killThread tid
                 let a = lazyToStrict $ responseBody elbs
-                if a == fromString "abcd"
+                if a == utf8String "abcd"
                      then return ()
-                     else if a == fromString "bwahaha"
+                     else if a == utf8String "bwahaha"
                             then error "Should have overwriten request's own header!"
                             else error $ "Some kind of magic happened, User-Agent: \"" ++ show a ++ "\"."
             it "zeroes overrideHeaders" $ do
@@ -160,7 +164,7 @@ main = do
                         setOverrideHeaders []
                         makeRequestLbs request{Network.HTTP.Conduit.requestHeaders = [(hUserAgent, "bwahaha")]}
                 killThread tid
-                if (lazyToStrict $ responseBody elbs) /= fromString "bwahaha"
+                if (lazyToStrict $ responseBody elbs) /= utf8String "bwahaha"
                      then error "Shouldn't have deleted user-agent!"
                      else return ()
             it "setting overrideheaders doesn't unset useragent" $ do
@@ -172,7 +176,7 @@ main = do
                         setOverrideHeaders []
                         makeRequestLbs request{Network.HTTP.Conduit.requestHeaders = [(hUserAgent, "bwahaha")]}
                 killThread tid
-                if (lazyToStrict $ responseBody elbs) /= fromString "abcd"
+                if (lazyToStrict $ responseBody elbs) /= utf8String "abcd"
                      then error "Should have overrided user-agent!"
                      else return ()
             it "doesn't override additional headers" $ do
@@ -184,7 +188,7 @@ main = do
                         insertOverrideHeader ("Connection", "keep-alive")
                         makeRequestLbs request{Network.HTTP.Conduit.requestHeaders = [("User-Agent", "another agent"), ("Accept", "everything/digestible")]}
                 killThread tid
-                if (lazyToStrict $ responseBody elbs) /= fromString "everything/digestible"
+                if (lazyToStrict $ responseBody elbs) /= utf8String "everything/digestible"
                      then error "Shouldn't have deleted Accept header!"
                      else return ()
             it "withOverrideHeader: doesn't override additional headers" $ do
@@ -198,7 +202,7 @@ main = do
                     (,) <$> (lazyToStrict . responseBody <$> makeRequestLbs request1)
                         <*> (lazyToStrict . responseBody <$> makeRequestLbs request2)
                 killThread tid
-                when (bs1 /= fromString "everything/digestible") $
+                when (bs1 /= utf8String "everything/digestible") $
                     error "Shouldn't have deleted Accept header!"
                 when (bs2 /= "another agent") $
                     error "Shouldn't have overriden user agent!"
@@ -213,7 +217,7 @@ main = do
                     (,) <$> (lazyToStrict . responseBody <$> makeRequestLbs request1)
                         <*> (lazyToStrict . responseBody <$> makeRequestLbs request2)
                 killThread tid
-                when (bs1 /= fromString "everything/digestible") $
+                when (bs1 /= utf8String "everything/digestible") $
                     error "Shouldn't have deleted Accept header!"
                 when (bs2 /= "another agent") $
                     error "Shouldn't have overriden user agent!"
@@ -225,7 +229,7 @@ main = do
                         setAuthorities $ const $ Just (user, pass)
                         makeRequestLbs request
                 killThread tid
-                if (lazyToStrict $ responseBody elbs) /= (fromString "Basic " `S.append` (encode $ user `S.append` ":" `S.append` pass))
+                if (lazyToStrict $ responseBody elbs) /= (utf8String "Basic " `S.append` (encode $ user `S.append` ":" `S.append` pass))
                      then error "Authorities didn't get set correctly!"
                      else return ()
             it "can follow redirects" $ do
@@ -351,6 +355,6 @@ main = do
                         lbs2 <- makeRequestLbs request2
                         return (lbs1, lbs2)
                 killThread tid
-                if (lazyToStrict $ responseBody elbs1) /= fromString "homepage" || (lazyToStrict $ responseBody elbs2) /= dummy
+                if (lazyToStrict $ responseBody elbs1) /= utf8String "homepage" || (lazyToStrict $ responseBody elbs2) /= dummy
                      then error "Should have followed the relative reference"
                      else return ()
