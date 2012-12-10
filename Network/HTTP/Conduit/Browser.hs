@@ -23,9 +23,11 @@
 --
 -- Here is an example program:
 --
--- > import qualified Data.ByteString as B
+-- > {-# LANGUAGE OverloadedStrings #-}
 -- > import qualified Data.ByteString.Lazy as LB
--- > import qualified Data.ByteString.UTF8 as UB
+-- > import qualified Data.Text.Encoding as TE
+-- > import qualified Data.Text.Lazy.Encoding as TLE
+-- > import qualified Data.Text.Lazy.IO as TLIO
 -- > import           Data.Conduit
 -- > import           Network.HTTP.Conduit
 -- > import           Network.HTTP.Conduit.Browser
@@ -34,8 +36,8 @@
 -- > req1 :: IO (Request (ResourceT IO))
 -- > req1 = do
 -- >   req <- parseUrl "http://www.myurl.com/login.php"
--- >   return $ urlEncodedBody [ (UB.fromString "name", UB.fromString "litherum")
--- >                           , (UB.fromString "pass", UB.fromString "S33kRe7")
+-- >   return $ urlEncodedBody [ (TE.encodeUtf8 "name", TE.encodeUtf8 "litherum")
+-- >                           , (TE.encodeUtf8 "pass", TE.encodeUtf8 "S33kRe7")
 -- >                           ] req
 -- > 
 -- > -- Once authenticated, run this request
@@ -54,7 +56,7 @@
 -- >   r1 <- req1
 -- >   r2 <- req2
 -- >   out <- runResourceT $ browse man $ action r1 r2
--- >   putStrLn $ UB.toString $ B.concat $ LB.toChunks $ responseBody out
+-- >   TLIO.putStrLn $ TLE.decodeUtf8 $ responseBody out
 
 module Network.HTTP.Conduit.Browser
     (
@@ -65,6 +67,7 @@ module Network.HTTP.Conduit.Browser
     , parseRelativeUrl
     , makeRequest
     , makeRequestLbs
+    , downloadFile
     -- * Browser state
     -- | You can save and restore the state at will
     , BrowserState
@@ -73,7 +76,7 @@ module Network.HTTP.Conduit.Browser
     , setBrowserState
     , withBrowserState
     -- ** Manager
-    , Manager
+    -- | The active manager, managing the connection pool 
     , getManager
     , setManager
     -- ** Location
@@ -185,9 +188,6 @@ module Network.HTTP.Conduit.Browser
     , getCheckStatus
     , setCheckStatus
     , withCheckStatus
-    -- ** Downloading
-    -- | Functions for downloading files.
-    , downloadFile
     )
   where
 
@@ -330,7 +330,7 @@ makeRequest request = do
                       }
               return (request'', res, response)
 #if MIN_VERSION_http_conduit(1,8,5)
-        runRedirectionChain request' redirect_count _
+        runRedirectionChain request0 redirect_count _
           = httpRedirect
                 redirect_count
                 (\request' -> do
@@ -338,7 +338,7 @@ makeRequest request = do
                     let mreq = getRedirectedRequest request'' (responseHeaders response) (HT.statusCode (responseStatus response))
                     return (res, mreq))
                 liftResourceT
-                request'
+                request0
 #else
         runRedirectionChain request' redirect_count ress
           | redirect_count == (-1) = LE.throwIO . TooManyRedirects =<< mapM (liftResourceT . lbsResponse) ress
@@ -375,6 +375,12 @@ makeRequest request = do
 -- 'makeRequest' directly. 
 makeRequestLbs :: (MonadBaseControl IO m, MonadResource m) => Request (ResourceT IO) -> GenericBrowserAction m (Response L.ByteString)
 makeRequestLbs = liftResourceT . lbsResponse <=< makeRequest
+
+-- | Make a request and sink the 'responseBody' to a file.
+downloadFile :: (MonadResource m, MonadBaseControl IO m) => FilePath -> Request (ResourceT IO) -> GenericBrowserAction m ()
+downloadFile file request = do
+  res <- makeRequest request
+  liftResourceT $ responseBody res $$+- CB.sinkFile file
 
 applyOverrideHeaders :: Map.Map HT.HeaderName BS.ByteString -> Request a -> Request a
 applyOverrideHeaders ov request' = request' {requestHeaders = x $ requestHeaders request'}
@@ -586,14 +592,3 @@ getUri req = URI
     , uriQuery = S8.unpack $ queryString req
     , uriFragment = ""
     }
-
--- | Download the contents of a 'responseBody' into a file.
-downloadFile
-  :: (MonadResource m, MonadBaseControl IO m)
-  => FilePath
-  -> Request (ResourceT IO)
-  -> GenericBrowserAction m ()
-downloadFile file = do
-  liftResourceT . download <=< makeRequest
-  where
-  download src = responseBody src $$+- CB.sinkFile file
