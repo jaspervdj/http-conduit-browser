@@ -66,6 +66,7 @@ module Network.HTTP.Conduit.Browser
     , makeRequest
     , makeRequestLbs
     -- * Browser state
+    -- | You can save and restore the state at will
     , BrowserState
     , defaultState
     , getBrowserState
@@ -388,7 +389,6 @@ updateMyCookieJar response request' now cookie_jar cookie_filter = do
         set_cookies = map parseSetCookie set_cookie_data
         cookieJar' = foldl (\ cj c -> insertCheckedCookie c cj True) cookie_jar
 
--- | You can save and restore the state at will
 getBrowserState    :: Monad m => GenericBrowserAction m BrowserState
 getBrowserState = get
 setBrowserState    :: Monad m => BrowserState -> GenericBrowserAction m ()
