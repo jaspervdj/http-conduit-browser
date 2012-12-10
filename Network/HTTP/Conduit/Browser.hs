@@ -184,6 +184,9 @@ module Network.HTTP.Conduit.Browser
     , getCheckStatus
     , setCheckStatus
     , withCheckStatus
+    -- ** Downloading
+    -- | Functions for downloading files.
+    , downloadFile
     )
   where
 
@@ -583,3 +586,14 @@ getUri req = URI
     , uriQuery = S8.unpack $ queryString req
     , uriFragment = ""
     }
+
+-- | Download the contents of a 'responseBody' into a file.
+downloadFile
+  :: (MonadResource m, MonadBaseControl IO m)
+  => FilePath
+  -> Request (ResourceT IO)
+  -> GenericBrowserAction m ()
+downloadFile file = do
+  liftResourceT . download <=< makeRequest
+  where
+  download src = responseBody src $$+- CB.sinkFile file
