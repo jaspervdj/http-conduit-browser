@@ -353,7 +353,7 @@ makeRequest request = do
               case getRedirectedRequest request'' (responseHeaders response) (HT.statusCode (responseStatus response)) of
                 Nothing -> return res
                 Just request''' -> do
-                  -- Canibalised from Network.HTTP.Conduit, should be made visible there.
+                  -- Canibalised from Network.HTTP.Conduit for http-conduit < 1.8.5
                   -- Allow the original connection to return to the
                   -- connection pool immediately by flushing the body.
                   -- If the response body is too large, don't flush, but
@@ -583,8 +583,8 @@ setManager         :: Monad m => Manager -> GenericBrowserAction m ()
 setManager       b = get >>= \ a -> put a {manager = b}
 
 #if !MIN_VERSION_http_conduit(1,8,5)
+-- Canibalised from Network.HTTP.Conduit.Request for http-conduit < 1.8.5
 -- | Extract a 'URI' from the request.
--- Canibalised from Network.HTTP.Conduit.Request, should be made visible there.
 getUri :: Request m' -> URI
 getUri req = URI
     { uriScheme = if secure req
