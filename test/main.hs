@@ -2,6 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 import Test.Hspec
+import Test.HUnit
 import Control.Applicative
 import Control.Monad
 import Control.Exception (Exception, toException)
@@ -21,6 +22,9 @@ import Data.CaseInsensitive (mk)
 import qualified Data.ByteString.Lazy as L
 import Data.IORef
 import Control.Monad.IO.Class (liftIO)
+import Data.Time.Clock
+import Data.Time.Calendar
+import Web.Cookie
 
 -- TODO tests for responseTimeout/Browser.timeout.
 
@@ -73,6 +77,11 @@ app req =
         ["redir1"] -> return $ responseLBS temporaryRedirect307 [redir2] L.empty
         ["redir2"] -> return $ responseLBS temporaryRedirect307 [redir3] L.empty
         ["redir3"] -> return $ responseLBS status200 [] $ strictToLazy dummy
+        ["cookie_redir2"] -> return $ responseLBS status303 [("Set-Cookie", "baka=baka;"), (hLocation, "/checkcookie")] ""
+        ["checkcookie"] -> return $
+            if "flavor=chocolate-chip;baka=baka" == getHeader hCookie
+                then responseLBS status200 [] "nom-nom-nom"
+                else responseLBS status200 [] $ getHeader "Cookie"
         _ -> return $ responseLBS status404 [] "not found"
 
     where tastyCookie = (mk (utf8String "Set-Cookie"), utf8String "flavor=chocolate-chip;")
@@ -112,6 +121,19 @@ main = do
                 if (lazyToStrict $ responseBody elbs) /= S.empty
                      then error "Shouldn't have gotten the cookie back!"
                      else return ()
+            it "user-defined cookies survive redirects" $ do
+                tid <- forkIO $ run 3019 app
+                req <- parseUrl "http://127.0.0.1:3019/cookie_redir2"
+                let setCookie = def
+                        { setCookieName = "flavor"
+                        , setCookieValue = "chocolate-chip" }
+                    default_time = UTCTime (ModifiedJulianDay 56200) (secondsToDiffTime 0)
+                elbs <- withManager $ \manager -> do
+                    browse manager $ do
+                        setCookieJar =<< receiveSetCookie setCookie req default_time True <$> getCookieJar
+                        responseBody <$> makeRequestLbs req
+                killThread tid
+                liftIO $ elbs @?= "nom-nom-nom"
             it "can save and load cookie jar" $ do
                 tid <- forkIO $ run 3011 app
                 request1 <- parseUrl "http://127.0.0.1:3011/cookies"
