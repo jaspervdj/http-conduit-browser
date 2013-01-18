@@ -134,6 +134,20 @@ main = do
                         responseBody <$> makeRequestLbs req
                 killThread tid
                 liftIO $ elbs @?= "nom-nom-nom"
+            it "user-defined cookies in req survive redirects" $ do
+                tid <- forkIO $ run 3019 app
+                req <- parseUrl "http://127.0.0.1:3019/cookie_redir2"
+                let setCookie = def
+                        { setCookieName = "flavor"
+                        , setCookieValue = "chocolate-chip" }
+                    default_time = UTCTime (ModifiedJulianDay 56200) (secondsToDiffTime 0)
+                elbs <- withManager $ \manager -> do
+                    browse manager $ do
+                        cjar <- receiveSetCookie setCookie req default_time True <$> getCookieJar
+                        let request = fst $ insertCookiesIntoRequest req cjar default_time
+                        responseBody <$> makeRequestLbs request
+                killThread tid
+                liftIO $ elbs @?= "nom-nom-nom"
             it "can save and load cookie jar" $ do
                 tid <- forkIO $ run 3011 app
                 request1 <- parseUrl "http://127.0.0.1:3011/cookies"

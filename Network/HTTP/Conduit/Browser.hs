@@ -304,13 +304,14 @@ makeRequest request = do
                (fromMaybe (redirectCount request) max_redirects)
                (fromMaybe (checkStatus request) current_check_status)
                Nothing
-  where retryHelper request' retry_count max_redirects check_status e
+  where snd3 (_, a, _) = a
+        retryHelper request' retry_count max_redirects check_status e
           | retry_count < 0 = case e of
             Just e' -> LE.throwIO e'
             Nothing -> LE.throwIO TooManyRetries
           | otherwise = do
               resp <- LE.catch (if max_redirects==0
-                                  then (\(_,a,_) -> a) `fmap` performRequest request'
+                                  then snd3 `fmap` performRequest request'
                                   else runRedirectionChain request' max_redirects [])
                 (\ (e'::HttpException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e')
               case check_status (responseStatus resp) (responseHeaders resp) of
@@ -340,6 +341,7 @@ makeRequest request = do
           = httpRedirect
                 redirect_count
                 (\request' -> do
+                    -- res is the original, response doesn't contain setCookie headers.
                     (request'', res, response) <- performRequest request'
                     let mreq = getRedirectedRequest request'' (responseHeaders response) (HT.statusCode (responseStatus response))
                     return (res, mreq))
