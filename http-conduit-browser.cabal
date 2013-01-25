@@ -1,5 +1,5 @@
 name:            http-conduit-browser
-version:         1.7.2
+version:         1.8
 license:         BSD3
 license-file:    LICENSE
 author:          Myles C. Maxfield <myles.maxfield@gmail.com>
