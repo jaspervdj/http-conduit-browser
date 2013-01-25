@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, ScopedTypeVariables, FlexibleContexts #-}
+{-# LANGUAGE CPP, ScopedTypeVariables, FlexibleContexts, OverloadedStrings #-}
 -- | This module is designed to work similarly to the Network.Browser module in the HTTP package.
 -- The idea is that there are two new types defined: 'BrowserState' and 'BrowserAction'. The
 -- purpose of this module is to make it easy to describe a browsing session, including navigating
@@ -55,7 +55,9 @@
 -- >   man <- newManager def
 -- >   r1 <- req1
 -- >   r2 <- req2
--- >   out <- runResourceT $ browse man $ action r1 r2
+-- >   out <- runResourceT $ browse man $ do
+-- >     setDefaultHeader "User-Agent" $ Just "A very popular browser"
+-- >     action r1 r2
 -- >   TLIO.putStrLn $ TLE.decodeUtf8 $ responseBody out
 
 module Network.HTTP.Conduit.Browser
@@ -151,6 +153,26 @@ module Network.HTTP.Conduit.Browser
     , setAuthorities
     , withAuthorities
     -- ** Headers
+    -- *** Default headers
+    -- | Specifies Headers that should be added to 'Request',
+    -- these will be overriden by any headers specified in 'requestHeaders'.
+    --
+    -- > do insertDefaultHeader ("User-Agent", "dog")
+    -- >    insertDefaultHeader ("Connection", "keep-alive")
+    -- >    makeRequest def{requestHeaders = [("User-Agent", "kitten"), ("Accept", "x-animal/mouse")]}
+    -- > > User-Agent: kitten
+    -- > > Accept: x-animal/mouse
+    -- > > Connection: keep-alive
+    --
+    -- default: @fromList [("User-Agent", "http-conduit-browser")]@
+    , getDefaultHeaders
+    , setDefaultHeaders
+    , withDefaultHeaders
+    , getDefaultHeader
+    , setDefaultHeader
+    , insertDefaultHeader
+    , deleteDefaultHeader
+    , withDefaultHeader
     -- *** Override headers
     -- | Specifies Headers that should be added to 'Request',
     -- these will override Headers already specified in 'requestHeaders'.
@@ -161,6 +183,8 @@ module Network.HTTP.Conduit.Browser
     -- > > User-Agent: rat
     -- > > Accept: everything/digestible
     -- > > Connection: keep-alive
+    --
+    -- default: @fromList []@
     , getOverrideHeaders
     , setOverrideHeaders
     , withOverrideHeaders
@@ -169,17 +193,6 @@ module Network.HTTP.Conduit.Browser
     , insertOverrideHeader
     , deleteOverrideHeader
     , withOverrideHeader
-    -- *** User agent
-    -- | What string to report our user-agent as.
-    -- if Nothing will not send user-agent unless one is specified in 'Request'
-    --
-    -- > getUserAgent = lookup "User-Agent" overrideHeaders
-    -- > setUserAgent a = insertOverrideHeader ("User-Agent", a)
-    --
-    -- default: @Just \"http-conduit\"@
-    , getUserAgent
-    , setUserAgent
-    , withUserAgent
     -- ** Error handling
     -- | Function to check the status code. Note that this will run after all redirects are performed.
     -- if Nothing uses Request's 'checkStatus'
@@ -212,7 +225,6 @@ import Network.URI (URI (..), URIAuth (..), parseRelativeReference, relativeTo, 
 import Data.Time.Clock (getCurrentTime, UTCTime)
 import Data.CaseInsensitive (mk)
 import Data.List (partition)
-import Data.String (fromString)
 import Web.Cookie (parseSetCookie)
 import Data.Maybe (catMaybes, fromMaybe)
 import qualified Data.Map as Map
@@ -236,6 +248,7 @@ data BrowserState = BrowserState
   , currentProxy        :: Maybe Proxy
   , currentSocksProxy   :: Maybe SocksConf
   , overrideHeaders     :: Map.Map HT.HeaderName BS.ByteString
+  , defaultHeaders      :: Map.Map HT.HeaderName BS.ByteString
   , browserCheckStatus  :: Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException)
   , manager             :: Manager
   } 
@@ -250,7 +263,8 @@ defaultState m = BrowserState { currentLocation = Nothing
                               , cookieJar = def
                               , currentProxy = Nothing
                               , currentSocksProxy = Nothing
-                              , overrideHeaders = Map.singleton HT.hUserAgent (fromString "http-conduit")
+                              , overrideHeaders = Map.empty
+                              , defaultHeaders = Map.singleton HT.hUserAgent "http-conduit-browser"
                               , browserCheckStatus = Nothing
                               , manager = m
                               }
@@ -291,10 +305,13 @@ makeRequest request = do
     , timeout = time_out
     , currentProxy  = current_proxy
     , currentSocksProxy = current_socks_proxy
+    , defaultHeaders = default_headers
     , overrideHeaders = override_headers
     , browserCheckStatus = current_check_status
     } <- get
-  retryHelper (applyOverrideHeaders override_headers $
+  retryHelper
+    (applyOverrideHeaders override_headers $
+     applyDefaultHeaders default_headers $
     request { redirectCount = 0
             , proxy = maybe (proxy request) Just current_proxy
             , socksProxy = maybe (socksProxy request) Just current_socks_proxy
@@ -366,7 +383,7 @@ makeRequest request = do
                               Just (i, bs') | BS.null bs' -> Just i
                               _ -> Nothing
                       sink =
-                          case lookup (fromString "content-length") (responseHeaders res) >>= readMay of
+                          case lookup "content-length" (responseHeaders res) >>= readMay of
                               Just i | i > maxFlush -> return ()
                               _ -> CB.isolate maxFlush =$ sinkNull
                   liftResourceT $ responseBody res $$+- sink
@@ -390,15 +407,19 @@ downloadFile file request = do
   res <- makeRequest request
   liftResourceT $ responseBody res $$+- CB.sinkFile file
 
+applyDefaultHeaders :: Map.Map HT.HeaderName BS.ByteString -> Request a -> Request a
+applyDefaultHeaders dv request = request {requestHeaders = x $ requestHeaders request}
+  where x r = Map.toList $ Map.union (Map.fromList r) dv
+
 applyOverrideHeaders :: Map.Map HT.HeaderName BS.ByteString -> Request a -> Request a
-applyOverrideHeaders ov request' = request' {requestHeaders = x $ requestHeaders request'}
+applyOverrideHeaders ov request = request {requestHeaders = x $ requestHeaders request}
   where x r = Map.toList $ Map.union ov (Map.fromList r)
 
 updateMyCookieJar :: Response a -> Request (ResourceT IO) -> UTCTime -> CookieJar -> (Request (ResourceT IO) -> Cookie -> IO Bool) -> IO (CookieJar, Response a)
 updateMyCookieJar response request' now cookie_jar cookie_filter = do
   filtered_cookies <- filterM (cookie_filter request') $ catMaybes $ map (\ sc -> generateCookie sc request' now True) set_cookies
   return (cookieJar' filtered_cookies, response {responseHeaders = other_headers})
-  where (set_cookie_headers, other_headers) = partition ((== (mk $ fromString "Set-Cookie")) . fst) $ responseHeaders response
+  where (set_cookie_headers, other_headers) = partition ((== "Set-Cookie") . fst) $ responseHeaders response
         set_cookie_data = map snd set_cookie_headers
         set_cookies = map parseSetCookie set_cookie_data
         cookieJar' = foldl (\ cj c -> insertCheckedCookie c cj True) cookie_jar
@@ -523,13 +544,38 @@ withCurrentSocksProxy a b = do
   setCurrentSocksProxy current
   return out
 
+getDefaultHeaders :: Monad m => GenericBrowserAction m HT.RequestHeaders
+getDefaultHeaders = get >>= \ a -> return $ Map.toList $ defaultHeaders a
+setDefaultHeaders :: Monad m => HT.RequestHeaders -> GenericBrowserAction m ()
+setDefaultHeaders b = get >>= \ a -> put a {defaultHeaders = Map.fromList b}
+withDefaultHeaders:: Monad m => HT.RequestHeaders -> GenericBrowserAction m a -> GenericBrowserAction m a
+withDefaultHeaders a b = do
+  current <- getDefaultHeaders
+  setDefaultHeaders a
+  out <- b
+  setDefaultHeaders current
+  return out
+getDefaultHeader :: Monad m => HT.HeaderName -> GenericBrowserAction m (Maybe BS.ByteString)
+getDefaultHeader b = get >>= \ a -> return $ Map.lookup b (defaultHeaders a)
+setDefaultHeader :: Monad m => HT.HeaderName -> Maybe BS.ByteString -> GenericBrowserAction m ()
+setDefaultHeader b Nothing = deleteDefaultHeader b
+setDefaultHeader b (Just c) = insertDefaultHeader (b, c)
+insertDefaultHeader :: Monad m => HT.Header -> GenericBrowserAction m ()
+insertDefaultHeader (b, c) = get >>= \ a -> put a {defaultHeaders = Map.insert b c (defaultHeaders a)}
+deleteDefaultHeader :: Monad m => HT.HeaderName -> GenericBrowserAction m ()
+deleteDefaultHeader b = get >>= \ a -> put a {defaultHeaders = Map.delete b (defaultHeaders a)}
+withDefaultHeader :: Monad m => HT.Header -> GenericBrowserAction m a -> GenericBrowserAction m a
+withDefaultHeader (a,b) c = do
+  current <- getDefaultHeader a
+  insertDefaultHeader (a,b)
+  out <- c
+  setDefaultHeader a current
+  return out
+
 getOverrideHeaders :: Monad m => GenericBrowserAction m HT.RequestHeaders
 getOverrideHeaders = get >>= \ a -> return $ Map.toList $ overrideHeaders a
 setOverrideHeaders :: Monad m => HT.RequestHeaders -> GenericBrowserAction m ()
-setOverrideHeaders b = do
-    current_user_agent <- getUserAgent
-    get >>= \ a -> put a {overrideHeaders = Map.fromList b}
-    setUserAgent current_user_agent
+setOverrideHeaders b = get >>= \ a -> put a {overrideHeaders = Map.fromList b}
 withOverrideHeaders:: Monad m => HT.RequestHeaders -> GenericBrowserAction m a -> GenericBrowserAction m a
 withOverrideHeaders a b = do
   current <- getOverrideHeaders
@@ -552,19 +598,6 @@ withOverrideHeader (a,b) c = do
   insertOverrideHeader (a,b)
   out <- c
   setOverrideHeader a current
-  return out
-
-getUserAgent       :: Monad m => GenericBrowserAction m (Maybe BS.ByteString)
-getUserAgent       = get >>= \ a -> return $ Map.lookup HT.hUserAgent (overrideHeaders a)
-setUserAgent       :: Monad m => Maybe BS.ByteString -> GenericBrowserAction m ()
-setUserAgent Nothing = deleteOverrideHeader HT.hUserAgent
-setUserAgent (Just b) = insertOverrideHeader (HT.hUserAgent, b)
-withUserAgent      :: Monad m => Maybe BS.ByteString -> GenericBrowserAction m a -> GenericBrowserAction m a
-withUserAgent a b = do
-  current <- getUserAgent
-  setUserAgent a
-  out <- b
-  setUserAgent current
   return out
 
 getCheckStatus    :: Monad m => GenericBrowserAction m (Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException))
