@@ -314,7 +314,7 @@ makeRequest request = do
                                   then snd3 `fmap` performRequest request'
                                   else runRedirectionChain request' max_redirects [])
                 [ LE.Handler $ \(e'::HttpException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e'
-                , LE.handler $ \(e'::IOException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e'
+                , LE.Handler $ \(e'::IOException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e'
                 ]
               case check_status (responseStatus resp) (responseHeaders resp) of
                 Nothing -> return resp
