@@ -9,7 +9,8 @@ import Control.Exception (Exception, toException)
 import qualified Data.ByteString as S
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Network.Wai hiding (requestBody)
+import Network.Wai hiding (requestBody, requestHeaders)
+import qualified Network.Wai as Wai
 import Network.Wai.Handler.Warp (run)
 import Network.HTTP.Conduit
 import Network.HTTP.Conduit.Browser
@@ -133,7 +134,7 @@ main = do
                         setCookieJar =<< receiveSetCookie setCookie req default_time True <$> getCookieJar
                         responseBody <$> makeRequestLbs req
                 killThread tid
-                liftIO $ elbs @?= "nom-nom-nom"
+                elbs @?= "nom-nom-nom"
 {- http-conduit-1.9+ cookieJar
             it "user-defined cookies in req survive redirects" $ do
                 tid <- forkIO $ run 3019 app
@@ -154,69 +155,55 @@ main = do
                 tid <- forkIO $ run 3011 app
                 request1 <- parseUrl "http://127.0.0.1:3011/cookies"
                 request2 <- parseUrl "http://127.0.0.1:3011/print-cookies"
-                (elbs1, elbs2) <- withManager $ \manager -> do
+                (lbs1, lbs2) <- withManager $ \manager -> do
                     browse manager $ do
                         _ <- makeRequestLbs request1
                         cookie_jar <- getCookieJar
                         setCookieJar def
-                        elbs1 <- makeRequestLbs request2
+                        lbs1 <- responseBody <$> makeRequestLbs request2
                         setCookieJar cookie_jar
-                        elbs2 <- makeRequestLbs request2
-                        return (elbs1, elbs2)
+                        lbs2 <- responseBody <$> makeRequestLbs request2
+                        return (lbs1, lbs2)
                 killThread tid
-                if (((lazyToStrict $ responseBody elbs1) /= S.empty) ||
-                    ((lazyToStrict $ responseBody elbs2) /= utf8String "flavor=chocolate-chip"))
-                     then error "Cookie jar got garbled up!"
-                     else return ()
+                when (lbs1 /= "" || lbs2 /= "flavor=chocolate-chip") $
+    				error "Cookie jar got garbled up!"
             it "user agent sets correctly" $ do
                 tid <- forkIO $ run 3012 app
                 request <- parseUrl "http://127.0.0.1:3012/useragent"
                 elbs <- withManager $ \manager -> do
                     browse manager $ do
-                        setUserAgent $ Just $ utf8String "abcd"
+                        setDefaultHeader "User-Agent" $ Just "abcd"
                         makeRequestLbs request
                 killThread tid
-                if (lazyToStrict $ responseBody elbs) /= utf8String "abcd"
-                     then error "Should have gotten the user agent back!"
-                     else return ()
+                when (responseBody elbs /= "abcd") $
+					error "Should have gotten the user agent back!"
+            it "default headers propagate" $ do
+                tid <- forkIO $ run 3012 app
+                request <- parseUrl "http://127.0.0.1:3012/useragent"
+                elbs <- withManager $ \manager -> do
+                    browse manager $ do
+                        setDefaultHeader "User-Agent" $ Just "abcd"
+                        makeRequestLbs request
+                killThread tid
+                responseBody elbs @?= "abcd"
+            it "default headers get overriden" $ do
+                tid <- forkIO $ run 3012 app
+                request <- parseUrl "http://127.0.0.1:3012/useragent"
+                elbs <- withManager $ \manager -> do
+                    browse manager $ do
+                        setDefaultHeader "User-Agent" $ Just "bwahaha"
+                        makeRequestLbs request{requestHeaders = [(hUserAgent, "abcd")]
+                killThread tid
+                responseBody elbs @?= "abcd"
             it "user agent overrides" $ do
                 tid <- forkIO $ run 3012 app
                 request <- parseUrl "http://127.0.0.1:3012/useragent"
                 elbs <- withManager $ \manager -> do
                     browse manager $ do
-                        setUserAgent $ Just $ utf8String "abcd"
-                        makeRequestLbs request{Network.HTTP.Conduit.requestHeaders = [(hUserAgent, "bwahaha")]}
+                        setOverrideHeader hUserAgent $ Just $ utf8String "abcd"
+                        makeRequestLbs request{requestHeaders = [(hUserAgent, "bwahaha")]}
                 killThread tid
-                let a = lazyToStrict $ responseBody elbs
-                if a == utf8String "abcd"
-                     then return ()
-                     else if a == utf8String "bwahaha"
-                            then error "Should have overwriten request's own header!"
-                            else error $ "Some kind of magic happened, User-Agent: \"" ++ show a ++ "\"."
-            it "zeroes overrideHeaders" $ do
-                tid <- forkIO $ run 3012 app
-                request <- parseUrl "http://127.0.0.1:3012/useragent"
-                elbs <- withManager $ \manager -> do
-                    browse manager $ do
-                        setUserAgent Nothing
-                        setOverrideHeaders []
-                        makeRequestLbs request{Network.HTTP.Conduit.requestHeaders = [(hUserAgent, "bwahaha")]}
-                killThread tid
-                if (lazyToStrict $ responseBody elbs) /= utf8String "bwahaha"
-                     then error "Shouldn't have deleted user-agent!"
-                     else return ()
-            it "setting overrideheaders doesn't unset useragent" $ do
-                tid <- forkIO $ run 3012 app
-                request <- parseUrl "http://127.0.0.1:3012/useragent"
-                elbs <- withManager $ \manager -> do
-                    browse manager $ do
-                        setUserAgent $ Just "abcd"
-                        setOverrideHeaders []
-                        makeRequestLbs request{Network.HTTP.Conduit.requestHeaders = [(hUserAgent, "bwahaha")]}
-                killThread tid
-                if (lazyToStrict $ responseBody elbs) /= utf8String "abcd"
-                     then error "Should have overrided user-agent!"
-                     else return ()
+                responseBody elbs @?= "abcd"
             it "doesn't override additional headers" $ do
                 tid <- forkIO $ run 3012 app
                 request <- parseUrl "http://127.0.0.1:3012/accept"
@@ -224,40 +211,25 @@ main = do
                     browse manager $ do
                         insertOverrideHeader ("User-Agent", "http-conduit")
                         insertOverrideHeader ("Connection", "keep-alive")
-                        makeRequestLbs request{Network.HTTP.Conduit.requestHeaders = [("User-Agent", "another agent"), ("Accept", "everything/digestible")]}
+                        makeRequestLbs request{requestHeaders = [("User-Agent", "another agent"), ("Accept", "everything/digestible")]}
                 killThread tid
-                if (lazyToStrict $ responseBody elbs) /= utf8String "everything/digestible"
-                     then error "Shouldn't have deleted Accept header!"
-                     else return ()
+                when (lazyToStrict (responseBody elbs) /= "everything/digestible") $
+					error "Shouldn't have deleted Accept header!"
             it "withOverrideHeader: doesn't override additional headers" $ do
                 tid <- forkIO $ run 3012 app
                 request1 <- parseUrl "http://127.0.0.1:3012/accept"
                 request2 <- parseUrl "http://127.0.0.1:3012/useragent"
-                (bs1, bs2) <- withManager $ flip browse $ do
+                (lbs1, lbs2) <- withManager $ flip browse $ do
                     insertOverrideHeader ("User-Agent", "another agent")
                     withOverrideHeader ("User-Agent", "http-conduit") $
                         insertOverrideHeader ("Accept", "everything/digestible")
-                    (,) <$> (lazyToStrict . responseBody <$> makeRequestLbs request1)
-                        <*> (lazyToStrict . responseBody <$> makeRequestLbs request2)
+                    r1 <- responseBody <$> makeRequestLbs request1
+                    r2 <- responseBody <$> makeRequestLbs request2
+                    return (r1,r2)
                 killThread tid
-                when (bs1 /= utf8String "everything/digestible") $
+                when (lbs1 /= "everything/digestible") $
                     error "Shouldn't have deleted Accept header!"
-                when (bs2 /= "another agent") $
-                    error "Shouldn't have overriden user agent!"
-            it "withUserAgent: doesn't override additional headers" $ do
-                tid <- forkIO $ run 3012 app
-                request1 <- parseUrl "http://127.0.0.1:3012/accept"
-                request2 <- parseUrl "http://127.0.0.1:3012/useragent"
-                (bs1, bs2) <- withManager $ flip browse $ do
-                    setUserAgent $ Just "another agent"
-                    withUserAgent (Just "different agent") $
-                        insertOverrideHeader ("Accept", "everything/digestible")
-                    (,) <$> (lazyToStrict . responseBody <$> makeRequestLbs request1)
-                        <*> (lazyToStrict . responseBody <$> makeRequestLbs request2)
-                killThread tid
-                when (bs1 /= utf8String "everything/digestible") $
-                    error "Shouldn't have deleted Accept header!"
-                when (bs2 /= "another agent") $
+                when (lbs2 /= "another agent") $
                     error "Shouldn't have overriden user agent!"
             it "authorities get set correctly" $ do
                 tid <- forkIO $ run 3013 app
