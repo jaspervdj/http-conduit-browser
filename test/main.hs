@@ -6,6 +6,7 @@ import Test.HUnit
 import Control.Applicative
 import Control.Monad
 import Control.Exception (Exception, toException)
+import Data.Monoid
 import qualified Data.ByteString as S
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -86,7 +87,7 @@ app req =
         _ -> return $ responseLBS status404 [] "not found"
 
     where tastyCookie = (mk (utf8String "Set-Cookie"), utf8String "flavor=chocolate-chip;")
-          getHeader s = strictToLazy $ case lookup s $ Network.Wai.requestHeaders req of
+          getHeader s = strictToLazy $ case lookup s $ Wai.requestHeaders req of
                             Just a -> a
                             Nothing -> S.empty
           redir2 = (mk (utf8String "Location"), utf8String "/redir2")
@@ -106,7 +107,7 @@ main = do
                         _ <- makeRequestLbs request1
                         makeRequestLbs request2
                 killThread tid
-                if (lazyToStrict $ responseBody elbs) /= utf8String "flavor=chocolate-chip"
+                if lazyToStrict (responseBody elbs) /= "flavor=chocolate-chip"
                      then error "Should have gotten the cookie back!"
                      else return ()
             it "cookie filter can deny cookies" $ do
@@ -119,7 +120,7 @@ main = do
                         _ <- makeRequestLbs request1
                         makeRequestLbs request2
                 killThread tid
-                if (lazyToStrict $ responseBody elbs) /= S.empty
+                if lazyToStrict (responseBody elbs) /= S.empty
                      then error "Shouldn't have gotten the cookie back!"
                      else return ()
             it "user-defined cookies survive redirects" $ do
@@ -166,7 +167,7 @@ main = do
                         return (lbs1, lbs2)
                 killThread tid
                 when (lbs1 /= "" || lbs2 /= "flavor=chocolate-chip") $
-    				error "Cookie jar got garbled up!"
+                    error "Cookie jar got garbled up!"
             it "user agent sets correctly" $ do
                 tid <- forkIO $ run 3012 app
                 request <- parseUrl "http://127.0.0.1:3012/useragent"
@@ -176,7 +177,7 @@ main = do
                         makeRequestLbs request
                 killThread tid
                 when (responseBody elbs /= "abcd") $
-					error "Should have gotten the user agent back!"
+                    error "Should have gotten the user agent back!"
             it "default headers propagate" $ do
                 tid <- forkIO $ run 3012 app
                 request <- parseUrl "http://127.0.0.1:3012/useragent"
@@ -192,7 +193,7 @@ main = do
                 elbs <- withManager $ \manager -> do
                     browse manager $ do
                         setDefaultHeader "User-Agent" $ Just "bwahaha"
-                        makeRequestLbs request{requestHeaders = [(hUserAgent, "abcd")]
+                        makeRequestLbs request{requestHeaders = [(hUserAgent, "abcd")]}
                 killThread tid
                 responseBody elbs @?= "abcd"
             it "user agent overrides" $ do
@@ -213,8 +214,8 @@ main = do
                         insertOverrideHeader ("Connection", "keep-alive")
                         makeRequestLbs request{requestHeaders = [("User-Agent", "another agent"), ("Accept", "everything/digestible")]}
                 killThread tid
-                when (lazyToStrict (responseBody elbs) /= "everything/digestible") $
-					error "Shouldn't have deleted Accept header!"
+                when (responseBody elbs /= "everything/digestible") $
+                    error "Shouldn't have deleted Accept header!"
             it "withOverrideHeader: doesn't override additional headers" $ do
                 tid <- forkIO $ run 3012 app
                 request1 <- parseUrl "http://127.0.0.1:3012/accept"
@@ -239,7 +240,7 @@ main = do
                         setAuthorities $ const $ Just (user, pass)
                         makeRequestLbs request
                 killThread tid
-                if (lazyToStrict $ responseBody elbs) /= (utf8String "Basic " `S.append` (encode $ user `S.append` ":" `S.append` pass))
+                if lazyToStrict (responseBody elbs) /= (utf8String "Basic " `mappend` (encode $ user `mappend` ":" `mappend` pass))
                      then error "Authorities didn't get set correctly!"
                      else return ()
             it "can follow redirects" $ do
@@ -250,7 +251,7 @@ main = do
                         setMaxRedirects $ Just 2
                         makeRequestLbs request
                 killThread tid
-                if (lazyToStrict $ responseBody elbs) /= dummy
+                if lazyToStrict (responseBody elbs) /= dummy
                      then error "Should be able to follow 2 redirects"
                      else return ()
             it "max redirects fails correctly" $ do
@@ -365,6 +366,6 @@ main = do
                         lbs2 <- makeRequestLbs request2
                         return (lbs1, lbs2)
                 killThread tid
-                if (lazyToStrict $ responseBody elbs1) /= utf8String "homepage" || (lazyToStrict $ responseBody elbs2) /= dummy
+                if responseBody elbs1 /= "homepage" || lazyToStrict (responseBody elbs2) /= dummy
                      then error "Should have followed the relative reference"
                      else return ()

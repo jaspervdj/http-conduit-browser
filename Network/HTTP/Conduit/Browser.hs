@@ -31,7 +31,7 @@
 -- > import           Data.Conduit
 -- > import           Network.HTTP.Conduit
 -- > import           Network.HTTP.Conduit.Browser
--- > 
+-- >
 -- > -- The web request to log in to a service
 -- > req1 :: IO (Request (ResourceT IO))
 -- > req1 = do
@@ -39,17 +39,17 @@
 -- >   return $ urlEncodedBody [ (TE.encodeUtf8 "name", TE.encodeUtf8 "litherum")
 -- >                           , (TE.encodeUtf8 "pass", TE.encodeUtf8 "S33kRe7")
 -- >                           ] req
--- > 
+-- >
 -- > -- Once authenticated, run this request
 -- > req2 :: IO (Request m')
 -- > req2 = parseUrl "http://www.myurl.com/main.php"
--- > 
+-- >
 -- > -- Bind two BrowserActions together
 -- > action :: Request (ResourceT IO) -> Request (ResourceT IO) -> BrowserAction (Response LB.ByteString)
 -- > action r1 r2 = do
 -- >   _ <- makeRequestLbs r1
 -- >   makeRequestLbs r2
--- > 
+-- >
 -- > main :: IO ()
 -- > main = do
 -- >   man <- newManager def
@@ -78,7 +78,7 @@ module Network.HTTP.Conduit.Browser
     , setBrowserState
     , withBrowserState
     -- ** Manager
-    -- | The active manager, managing the connection pool 
+    -- | The active manager, managing the connection pool
     , getManager
     , setManager
     -- ** Location
@@ -164,7 +164,7 @@ module Network.HTTP.Conduit.Browser
     -- > > Accept: x-animal/mouse
     -- > > Connection: keep-alive
     --
-    -- default: @fromList [("User-Agent", "http-conduit-browser")]@
+    -- default: @[(\"User-Agent\", \"http-conduit-browser\")]@
     , getDefaultHeaders
     , setDefaultHeaders
     , withDefaultHeaders
@@ -184,7 +184,7 @@ module Network.HTTP.Conduit.Browser
     -- > > Accept: everything/digestible
     -- > > Connection: keep-alive
     --
-    -- default: @fromList []@
+    -- default: @[]@
     , getOverrideHeaders
     , setOverrideHeaders
     , withOverrideHeaders
@@ -251,7 +251,7 @@ data BrowserState = BrowserState
   , defaultHeaders      :: Map.Map HT.HeaderName BS.ByteString
   , browserCheckStatus  :: Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException)
   , manager             :: Manager
-  } 
+  }
 
 defaultState :: Manager -> BrowserState
 defaultState m = BrowserState { currentLocation = Nothing
@@ -399,7 +399,7 @@ makeRequest request = do
 -- Note: Even though this function returns a lazy bytestring, it does not
 -- utilize lazy I/O, and therefore the entire response body will live in memory.
 -- If you want constant memory usage, you'll need to use the conduit package and
--- 'makeRequest' directly. 
+-- 'makeRequest' directly.
 makeRequestLbs :: (MonadBaseControl IO m, MonadResource m) => Request (ResourceT IO) -> GenericBrowserAction m (Response L.ByteString)
 makeRequestLbs = liftResourceT . lbsResponse <=< makeRequest
 
