@@ -134,6 +134,7 @@ main = do
                         responseBody <$> makeRequestLbs req
                 killThread tid
                 liftIO $ elbs @?= "nom-nom-nom"
+{- http-conduit-1.9+ cookieJar
             it "user-defined cookies in req survive redirects" $ do
                 tid <- forkIO $ run 3019 app
                 req <- parseUrl "http://127.0.0.1:3019/cookie_redir2"
@@ -148,6 +149,7 @@ main = do
                         responseBody <$> makeRequestLbs request
                 killThread tid
                 liftIO $ elbs @?= "nom-nom-nom"
+-}
             it "can save and load cookie jar" $ do
                 tid <- forkIO $ run 3011 app
                 request1 <- parseUrl "http://127.0.0.1:3011/cookies"
