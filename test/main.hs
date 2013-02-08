@@ -358,12 +358,10 @@ main = do
                      else return ()
             it "follows relative references" $ do
                 tid <- forkIO $ run 3014 app
-                request1 <- parseUrl "http://127.0.0.1:3014/"
                 (elbs1, elbs2) <- withManager $ \manager -> do
                     browse manager $ do
-                        lbs1 <- makeRequestLbs request1
-                        request2 <- parseRelativeUrl "redir3"
-                        lbs2 <- makeRequestLbs request2
+                        lbs1 <- makeRequestLbs =<< parseUrl "http://127.0.0.1:3014/"
+                        lbs2 <- makeRequestLbs =<< parseRelativeUrl "redir3"
                         return (lbs1, lbs2)
                 killThread tid
                 if responseBody elbs1 /= "homepage" || lazyToStrict (responseBody elbs2) /= dummy

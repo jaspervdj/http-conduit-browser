@@ -152,6 +152,13 @@ module Network.HTTP.Conduit.Browser
     , getAuthorities
     , setAuthorities
     , withAuthorities
+    -- ** Client certificates
+    -- | SSL client certificates
+    --
+    -- default: @Nothing@
+    , getClientCertificates
+    , setClientCertificates
+    , withClientCertificates
     -- ** Headers
     -- *** Default headers
     -- | Specifies Headers that should be added to 'Request',
@@ -204,38 +211,37 @@ module Network.HTTP.Conduit.Browser
     )
   where
 
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as S8
-import qualified Data.ByteString.Lazy as L
-import Control.Monad
-import Control.Monad.IO.Class
-import Control.Monad.Trans.State
-import Control.Exception
-import qualified Control.Exception.Lifted as LE
-import Data.Conduit
-import qualified Data.Conduit.Binary as CB
-import Data.Conduit.List (sinkNull)
-#if !MIN_VERSION_base(4,6,0)
-import Prelude hiding (catch)
-#endif
+import Network.HTTP.Conduit
+import Network.HTTP.Conduit.Internal (httpRedirect, getUri, setUri)
 import qualified Network.HTTP.Types as HT
 import qualified Network.HTTP.Types.Header as HT
 import Network.Socks5 (SocksConf)
 import Network.URI (URI (..), URIAuth (..), parseRelativeReference, relativeTo, uriToString)
 import Data.Time.Clock (getCurrentTime, UTCTime)
-import Data.CaseInsensitive (mk)
-import Data.List (partition)
 import Web.Cookie (parseSetCookie)
-import Data.Maybe (catMaybes, fromMaybe)
-import qualified Data.Map as Map
+import Data.Certificate.X509 (X509)
+import Network.TLS (PrivateKey)
 
-import Network.HTTP.Conduit
-#if MIN_VERSION_http_conduit(1,8,5)
-import Network.HTTP.Conduit.Internal (httpRedirect, getUri, setUri)
-#endif
+import Data.Conduit
+import qualified Data.Conduit.Binary as CB
+import Data.Conduit.List (sinkNull)
+
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as S8
+import qualified Data.ByteString.Lazy as L
+
+import Data.List (partition)
+import Data.Maybe (catMaybes, fromMaybe)
+import Control.Monad
+import Control.Monad.IO.Class
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.State
 import Control.Monad.Trans.Resource (liftResourceT)
 import Control.Monad.Trans.Control (MonadBaseControl)
-import Control.Failure (Failure)
+import Control.Failure
+import qualified Control.Exception.Lifted as LE
+import Control.Exception (SomeException, IOException, toException)
+import qualified Data.Map as Map
 
 data BrowserState = BrowserState
   { currentLocation     :: Maybe URI
@@ -243,6 +249,7 @@ data BrowserState = BrowserState
   , maxRetryCount       :: Int
   , timeout             :: Maybe Int
   , authorities         :: Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString)
+  , browserClientCertificates :: Maybe [(X509, Maybe PrivateKey)]
   , cookieFilter        :: Request (ResourceT IO) -> Cookie -> IO Bool
   , cookieJar           :: CookieJar
   , currentProxy        :: Maybe Proxy
@@ -259,6 +266,7 @@ defaultState m = BrowserState { currentLocation = Nothing
                               , maxRetryCount = 0
                               , timeout = Nothing
                               , authorities = const Nothing
+                              , browserClientCertificates = Nothing
                               , cookieFilter = const $ const $ return True
                               , cookieJar = def
                               , currentProxy = Nothing
@@ -281,24 +289,21 @@ browse m act = evalStateT act (defaultState m)
 --
 -- Will throw 'InvalidUrlException' on parse failures or if your Location is 'Nothing' (e.g. you haven't made any requests before)
 parseRelativeUrl :: Failure HttpException m => String -> GenericBrowserAction m (Request m')
-parseRelativeUrl url = maybe err (parse . use) =<< gets currentLocation
-  where err = throw $ InvalidUrlException url "Invalid URL"
-        uri = fromMaybe err $ parseRelativeReference url
-        use = fromMaybe err . relativeTo' uri
+parseRelativeUrl url =
+    maybe err use =<< gets currentLocation
+  where err = lift $ failure $ InvalidUrlException url "Invalid URL"
+        use loc = maybe err (setUri def) $ do
+            uri <- parseRelativeReference url
+            relativeTo' uri loc
 #if MIN_VERSION_network(2,4,0)
         relativeTo' x = Just . relativeTo x
 #else
         relativeTo' = relativeTo
 #endif
-#if MIN_VERSION_http_conduit(1,8,5)
-        parse = setUri def
-#else
-        parse = parseUrl . flip (uriToString id) ""
-#endif
 
 -- | Make a request, using all the state in the current BrowserState
 makeRequest :: (MonadBaseControl IO m, MonadResource m) => Request (ResourceT IO) -> GenericBrowserAction m (Response (ResumableSource (ResourceT IO) BS.ByteString))
-makeRequest request = do
+makeRequest req = do
   BrowserState
     { maxRetryCount = max_retry_count
     , maxRedirects = max_redirects
@@ -308,91 +313,80 @@ makeRequest request = do
     , defaultHeaders = default_headers
     , overrideHeaders = override_headers
     , browserCheckStatus = current_check_status
+    , browserClientCertificates = client_certificates
     } <- get
   retryHelper
     (applyOverrideHeaders override_headers $
      applyDefaultHeaders default_headers $
-    request { redirectCount = 0
-            , proxy = maybe (proxy request) Just current_proxy
-            , socksProxy = maybe (socksProxy request) Just current_socks_proxy
+    req { redirectCount = 0
+            , proxy = maybe (proxy req) Just current_proxy
+            , socksProxy = maybe (socksProxy req) Just current_socks_proxy
             , checkStatus = \ _ _ -> Nothing
-            , responseTimeout = maybe (responseTimeout request) Just time_out
+            , responseTimeout = maybe (responseTimeout req) Just time_out
+            , clientCertificates = fromMaybe (clientCertificates req) client_certificates
             }) max_retry_count
-               (fromMaybe (redirectCount request) max_redirects)
-               (fromMaybe (checkStatus request) current_check_status)
+               (fromMaybe (redirectCount req) max_redirects)
+               (fromMaybe (checkStatus req) current_check_status)
                Nothing
-  where snd3 (_, a, _) = a
-        retryHelper request' retry_count max_redirects check_status e
-          | retry_count < 0 = case e of
-            Just e' -> LE.throwIO e'
-            Nothing -> LE.throwIO TooManyRetries
-          | otherwise = do
-              resp <- LE.catches (if max_redirects==0
-                                  then snd3 `fmap` performRequest request'
-                                  else runRedirectionChain request' max_redirects [])
-                [ LE.Handler $ \(e'::HttpException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e'
-                , LE.Handler $ \(e'::IOException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e'
-                ]
-              case check_status (responseStatus resp) (responseHeaders resp) of
-                Nothing -> return resp
-                Just e' -> retryHelper request' (retry_count - 1) max_redirects check_status (Just e')
-        applyAuthorities auths request' = case auths request' of
-          Just (user, pass) -> applyBasicAuth user pass request'
-          Nothing -> request'
-        performRequest request' = do
-              s@(BrowserState { manager = manager'
-                              , authorities = auths
-                              , cookieJar = cookie_jar
-                              , cookieFilter = cookie_filter
-                              }) <- get
-              now <- liftIO getCurrentTime
-              let (request'', cookie_jar') = insertCookiesIntoRequest
-                                              (applyAuthorities auths request')
-                                              (evictExpiredCookies cookie_jar now) now
-              res <- liftResourceT $ http request'' manager'
-              (cookie_jar'', response) <- liftIO $ updateMyCookieJar res request'' now cookie_jar' cookie_filter
-              put $ s { cookieJar = cookie_jar''
-                      , currentLocation = Just $ getUri request''
-                      }
-              return (request'', res, response)
-#if MIN_VERSION_http_conduit(1,8,5)
-        runRedirectionChain request0 redirect_count _
-          = httpRedirect
-                redirect_count
-                (\request' -> do
-                    -- res is the original, response doesn't contain setCookie headers.
-                    (request'', res, response) <- performRequest request'
-                    let mreq = getRedirectedRequest request'' (responseHeaders response) (HT.statusCode (responseStatus response))
-                    return (res, mreq))
-                liftResourceT
-                request0
-#else
-        runRedirectionChain request' redirect_count ress
-          | redirect_count == (-1) = LE.throwIO . TooManyRedirects =<< mapM (liftResourceT . lbsResponse) ress
-          | otherwise = do
-              (request'', res, response) <- performRequest request'
-              case getRedirectedRequest request'' (responseHeaders response) (HT.statusCode (responseStatus response)) of
-                Nothing -> return res
-                Just request''' -> do
-                  -- Canibalised from Network.HTTP.Conduit for http-conduit < 1.8.5
-                  -- Allow the original connection to return to the
-                  -- connection pool immediately by flushing the body.
-                  -- If the response body is too large, don't flush, but
-                  -- instead just close the connection.
-                  let maxFlush = 1024
-                      readMay bs =
-                          case S8.readInt bs of
-                              Just (i, bs') | BS.null bs' -> Just i
-                              _ -> Nothing
-                      sink =
-                          case lookup "content-length" (responseHeaders res) >>= readMay of
-                              Just i | i > maxFlush -> return ()
-                              _ -> CB.isolate maxFlush =$ sinkNull
-                  liftResourceT $ responseBody res $$+- sink
+  where
+    snd3 (_, a, _) = a
+    retryHelper request' retry_count max_redirects check_status e
+      | retry_count < 0 = case e of
+        Just e' -> LE.throwIO e'
+        Nothing -> LE.throwIO TooManyRetries
+      | otherwise = do
+          resp <- LE.catches
+            (if max_redirects == 0
+                then snd3 `fmap` performRequest request'
+                else runRedirectionChain request' max_redirects)
+            [ LE.Handler $ \(e'::HttpException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e'
+            , LE.Handler $ \(e'::IOException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e'
+            ]
+          case check_status (responseStatus resp) (responseHeaders resp) of
+            Nothing -> return resp
+            Just e' -> retryHelper request' (retry_count - 1) max_redirects check_status (Just e')
+    runRedirectionChain request'' redirect_count
+      = httpRedirect
+          redirect_count
+          (\request' -> do
+              (request, res, res') <- performRequest request'
+              let mreq = getRedirectedRequest request (responseHeaders res') (HT.statusCode $ responseStatus res')
+              return (res, mreq))
+          liftResourceT
+          request''
+    performRequest request' = do
+        s@(BrowserState { manager = manager'
+                        , authorities = auths
+                        , cookieJar = cookie_jar
+                        , cookieFilter = cookie_filter
+                        }) <- get
+        now <- liftIO getCurrentTime
+        let (request'', cookie_jar') =
+                insertCookiesIntoRequest
+                    (applyAuthorities auths request')
+                    (evictExpiredCookies cookie_jar now) now
+        res <- liftResourceT $ http request'' manager'
+        now' <- liftIO getCurrentTime
+        (cookie_jar'', response) <- liftIO $
+                updateMyCookieJar res request'' now' cookie_jar' cookie_filter
+        put $ s { cookieJar = cookie_jar''
+                , currentLocation = Just $ getUri request''
+                }
+        return (request'', res, response)
 
-                  -- And now perform the actual redirect
-                  runRedirectionChain request''' (redirect_count - 1) (res:ress)
-#endif
+applyAuthorities :: (Request a -> Maybe (BS.ByteString, BS.ByteString)) -> Request a -> Request a
+applyAuthorities auths request' =
+    case auths request' of
+        Just (user, pass) -> applyBasicAuth user pass request'
+        Nothing -> request'
+
+applyDefaultHeaders :: Map.Map HT.HeaderName BS.ByteString -> Request a -> Request a
+applyDefaultHeaders dv request = request {requestHeaders = x $ requestHeaders request}
+  where x r = Map.toList $ Map.union (Map.fromList r) dv
+
+applyOverrideHeaders :: Map.Map HT.HeaderName BS.ByteString -> Request a -> Request a
+applyOverrideHeaders ov request = request {requestHeaders = x $ requestHeaders request}
+  where x r = Map.toList $ Map.union ov (Map.fromList r)
 
 -- | Make a request and pack the result as a lazy bytestring.
 --
@@ -408,14 +402,6 @@ downloadFile :: (MonadResource m, MonadBaseControl IO m) => FilePath -> Request 
 downloadFile file request = do
   res <- makeRequest request
   liftResourceT $ responseBody res $$+- CB.sinkFile file
-
-applyDefaultHeaders :: Map.Map HT.HeaderName BS.ByteString -> Request a -> Request a
-applyDefaultHeaders dv request = request {requestHeaders = x $ requestHeaders request}
-  where x r = Map.toList $ Map.union (Map.fromList r) dv
-
-applyOverrideHeaders :: Map.Map HT.HeaderName BS.ByteString -> Request a -> Request a
-applyOverrideHeaders ov request = request {requestHeaders = x $ requestHeaders request}
-  where x r = Map.toList $ Map.union ov (Map.fromList r)
 
 updateMyCookieJar :: Response a -> Request (ResourceT IO) -> UTCTime -> CookieJar -> (Request (ResourceT IO) -> Cookie -> IO Bool) -> IO (CookieJar, Response a)
 updateMyCookieJar response request' now cookie_jar cookie_filter = do
@@ -438,118 +424,58 @@ withBrowserState s a = do
   put current
   return out
 
-getLocation    :: Monad m => GenericBrowserAction m (Maybe URI)
-getLocation    = get >>= \ a -> return $ currentLocation a
-setLocation    :: Monad m => Maybe URI -> GenericBrowserAction m ()
-setLocation  b = get >>= \ a -> put a {currentLocation = b}
-withLocation   :: Monad m => Maybe URI -> GenericBrowserAction m a -> GenericBrowserAction m a
-withLocation a b = do
-  current <- getLocation
-  setLocation a
-  out <- b
-  setLocation current
-  return out
+getManager         :: Monad m => GenericBrowserAction m Manager
+getManager         = get >>= \ a -> return $ manager a
+setManager         :: Monad m => Manager -> GenericBrowserAction m ()
+setManager       b = get >>= \ a -> put a {manager = b}
 
-getMaxRedirects    :: Monad m => GenericBrowserAction m (Maybe Int)
-getMaxRedirects    = get >>= \ a -> return $ maxRedirects a
-setMaxRedirects    :: Monad m => Maybe Int -> GenericBrowserAction m ()
-setMaxRedirects  b = get >>= \ a -> put a {maxRedirects = b}
-withMaxRedirects   :: Monad m => Maybe Int -> GenericBrowserAction m a -> GenericBrowserAction m a
-withMaxRedirects a b = do
-  current <- getMaxRedirects
-  setMaxRedirects a
-  out <- b
-  setMaxRedirects current
-  return out
+#define RET(x) x
+#define CONCAT(x,y) RET(x)y
+#define GENERIC_FIELD(Name, field, Type)\
+    CONCAT(get,Name)      :: Monad m => GenericBrowserAction m (Type)      ;\
+    CONCAT(get,Name)      = gets field                                     ;\
+    CONCAT(set,Name)      :: Monad m => (Type) -> GenericBrowserAction m ()  ;\
+    CONCAT(set,Name)    b = get >>= \ a -> put a {field = b}               ;\
+    CONCAT(with,Name)     :: Monad m => (Type) -> GenericBrowserAction m a -> GenericBrowserAction m a   ;\
+    CONCAT(with,Name) a b = do     \
+      current <- CONCAT(get,Name) ;\
+      CONCAT(set,Name) a          ;\
+      out <- b                     ;\
+      CONCAT(set,Name) current    ;\
+      return out                   ;\
 
-getMaxRetryCount   :: Monad m => GenericBrowserAction m Int
-getMaxRetryCount   = get >>= \ a -> return $ maxRetryCount a
-setMaxRetryCount   :: Monad m => Int -> GenericBrowserAction m ()
-setMaxRetryCount b = get >>= \ a -> put a {maxRetryCount = b}
-withMaxRetryCount  :: Monad m => Int -> GenericBrowserAction m a -> GenericBrowserAction m a
-withMaxRetryCount a b = do
-  current <- getMaxRetryCount
-  setMaxRetryCount a
-  out <- b
-  setMaxRetryCount current
-  return out
+GENERIC_FIELD(Location, currentLocation, Maybe URI)
 
-getTimeout         :: Monad m => GenericBrowserAction m (Maybe Int)
-getTimeout         = get >>= \ a -> return $ timeout a
-setTimeout         :: Monad m => Maybe Int -> GenericBrowserAction m ()
-setTimeout       b = get >>= \ a -> put a {timeout = b}
-withTimeout        :: Monad m => Maybe Int -> GenericBrowserAction m a -> GenericBrowserAction m a
-withTimeout    a b = do
-  current <- getTimeout
-  setTimeout a
-  out <- b
-  setTimeout current
-  return out
+GENERIC_FIELD(MaxRedirects, maxRedirects, Maybe Int)
 
-getAuthorities     :: Monad m => GenericBrowserAction m (Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString))
-getAuthorities     = get >>= \ a -> return $ authorities a
-setAuthorities     :: Monad m => (Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString)) -> GenericBrowserAction m ()
-setAuthorities   b = get >>= \ a -> put a {authorities = b}
-withAuthorities    :: Monad m => (Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString)) -> GenericBrowserAction m a -> GenericBrowserAction m a
-withAuthorities a b = do
-  current <- getAuthorities
-  setAuthorities a
-  out <- b
-  setAuthorities current
-  return out
+GENERIC_FIELD(MaxRetryCount, maxRetryCount, Int)
 
-getCookieFilter    :: Monad m => GenericBrowserAction m (Request (ResourceT IO) -> Cookie -> IO Bool)
-getCookieFilter    = get >>= \ a -> return $ cookieFilter a
-setCookieFilter    :: Monad m => (Request (ResourceT IO) -> Cookie -> IO Bool) -> GenericBrowserAction m ()
-setCookieFilter  b = get >>= \ a -> put a {cookieFilter = b}
-withCookieFilter   :: Monad m => (Request (ResourceT IO) -> Cookie -> IO Bool) -> GenericBrowserAction m a -> GenericBrowserAction m a
-withCookieFilter a b = do
-  current <- getCookieFilter
-  setCookieFilter a
-  out <- b
-  setCookieFilter current
-  return out
+GENERIC_FIELD(Timeout, timeout, Maybe Int)
 
-getCookieJar       :: Monad m => GenericBrowserAction m CookieJar
-getCookieJar       = get >>= \ a -> return $ cookieJar a
-setCookieJar       :: Monad m => CookieJar -> GenericBrowserAction m ()
-setCookieJar     b = get >>= \ a -> put a {cookieJar = b}
-withCookieJar      :: Monad m => CookieJar -> GenericBrowserAction m a -> GenericBrowserAction m a
-withCookieJar a b = do
-  current <- getCookieJar
-  setCookieJar a
-  out <- b
-  setCookieJar current
-  return out
+GENERIC_FIELD(Authorities, authorities, Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString))
 
-getCurrentProxy    :: Monad m => GenericBrowserAction m (Maybe Proxy)
-getCurrentProxy    = get >>= \ a -> return $ currentProxy a
-setCurrentProxy    :: Monad m => Maybe Proxy -> GenericBrowserAction m ()
-setCurrentProxy  b = get >>= \ a -> put a {currentProxy = b}
-withCurrentProxy   :: Monad m => Maybe Proxy -> GenericBrowserAction m a -> GenericBrowserAction m a
-withCurrentProxy a b = do
-  current <- getCurrentProxy
-  setCurrentProxy a
-  out <- b
-  setCurrentProxy current
-  return out
+GENERIC_FIELD(ClientCertificates, browserClientCertificates, Maybe [(X509, Maybe PrivateKey)])
 
-getCurrentSocksProxy    :: Monad m => GenericBrowserAction m (Maybe SocksConf)
-getCurrentSocksProxy    = get >>= \ a -> return $ currentSocksProxy a
-setCurrentSocksProxy    :: Monad m => Maybe SocksConf -> GenericBrowserAction m ()
-setCurrentSocksProxy  b = get >>= \ a -> put a {currentSocksProxy = b}
-withCurrentSocksProxy   :: Monad m => Maybe SocksConf -> GenericBrowserAction m a -> GenericBrowserAction m a
-withCurrentSocksProxy a b = do
-  current <- getCurrentSocksProxy
-  setCurrentSocksProxy a
-  out <- b
-  setCurrentSocksProxy current
-  return out
+GENERIC_FIELD(CookieFilter, cookieFilter, Request (ResourceT IO) -> Cookie -> IO Bool)
+
+GENERIC_FIELD(CookieJar, cookieJar, CookieJar)
+
+GENERIC_FIELD(CurrentProxy, currentProxy, Maybe Proxy)
+
+GENERIC_FIELD(CurrentSocksProxy, currentSocksProxy, Maybe SocksConf)
+
+GENERIC_FIELD(CheckStatus, browserCheckStatus, Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException))
+
+#undef GENERIC_FIELD
+#undef CONCAT
+#undef RET
 
 getDefaultHeaders :: Monad m => GenericBrowserAction m HT.RequestHeaders
-getDefaultHeaders = get >>= \ a -> return $ Map.toList $ defaultHeaders a
+getDefaultHeaders = gets $ Map.toList . defaultHeaders
+
 setDefaultHeaders :: Monad m => HT.RequestHeaders -> GenericBrowserAction m ()
 setDefaultHeaders b = get >>= \ a -> put a {defaultHeaders = Map.fromList b}
+
 withDefaultHeaders:: Monad m => HT.RequestHeaders -> GenericBrowserAction m a -> GenericBrowserAction m a
 withDefaultHeaders a b = do
   current <- getDefaultHeaders
@@ -557,15 +483,20 @@ withDefaultHeaders a b = do
   out <- b
   setDefaultHeaders current
   return out
+
 getDefaultHeader :: Monad m => HT.HeaderName -> GenericBrowserAction m (Maybe BS.ByteString)
-getDefaultHeader b = get >>= \ a -> return $ Map.lookup b (defaultHeaders a)
+getDefaultHeader b = gets $ Map.lookup b . defaultHeaders
+
 setDefaultHeader :: Monad m => HT.HeaderName -> Maybe BS.ByteString -> GenericBrowserAction m ()
 setDefaultHeader b Nothing = deleteDefaultHeader b
 setDefaultHeader b (Just c) = insertDefaultHeader (b, c)
+
 insertDefaultHeader :: Monad m => HT.Header -> GenericBrowserAction m ()
 insertDefaultHeader (b, c) = get >>= \ a -> put a {defaultHeaders = Map.insert b c (defaultHeaders a)}
+
 deleteDefaultHeader :: Monad m => HT.HeaderName -> GenericBrowserAction m ()
 deleteDefaultHeader b = get >>= \ a -> put a {defaultHeaders = Map.delete b (defaultHeaders a)}
+
 withDefaultHeader :: Monad m => HT.Header -> GenericBrowserAction m a -> GenericBrowserAction m a
 withDefaultHeader (a,b) c = do
   current <- getDefaultHeader a
@@ -575,9 +506,11 @@ withDefaultHeader (a,b) c = do
   return out
 
 getOverrideHeaders :: Monad m => GenericBrowserAction m HT.RequestHeaders
-getOverrideHeaders = get >>= \ a -> return $ Map.toList $ overrideHeaders a
+getOverrideHeaders = gets $ Map.toList . overrideHeaders
+
 setOverrideHeaders :: Monad m => HT.RequestHeaders -> GenericBrowserAction m ()
 setOverrideHeaders b = get >>= \ a -> put a {overrideHeaders = Map.fromList b}
+
 withOverrideHeaders:: Monad m => HT.RequestHeaders -> GenericBrowserAction m a -> GenericBrowserAction m a
 withOverrideHeaders a b = do
   current <- getOverrideHeaders
@@ -585,15 +518,20 @@ withOverrideHeaders a b = do
   out <- b
   setOverrideHeaders current
   return out
+
 getOverrideHeader :: Monad m => HT.HeaderName -> GenericBrowserAction m (Maybe BS.ByteString)
-getOverrideHeader b = get >>= \ a -> return $ Map.lookup b (overrideHeaders a)
+getOverrideHeader b = gets $ Map.lookup b . overrideHeaders
+
 setOverrideHeader :: Monad m => HT.HeaderName -> Maybe BS.ByteString -> GenericBrowserAction m ()
 setOverrideHeader b Nothing = deleteOverrideHeader b
 setOverrideHeader b (Just c) = insertOverrideHeader (b, c)
+
 insertOverrideHeader :: Monad m => HT.Header -> GenericBrowserAction m ()
 insertOverrideHeader (b, c) = get >>= \ a -> put a {overrideHeaders = Map.insert b c (overrideHeaders a)}
+
 deleteOverrideHeader :: Monad m => HT.HeaderName -> GenericBrowserAction m ()
 deleteOverrideHeader b = get >>= \ a -> put a {overrideHeaders = Map.delete b (overrideHeaders a)}
+
 withOverrideHeader :: Monad m => HT.Header -> GenericBrowserAction m a -> GenericBrowserAction m a
 withOverrideHeader (a,b) c = do
   current <- getOverrideHeader a
@@ -601,39 +539,3 @@ withOverrideHeader (a,b) c = do
   out <- c
   setOverrideHeader a current
   return out
-
-getCheckStatus    :: Monad m => GenericBrowserAction m (Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException))
-getCheckStatus    = get >>= \ a -> return $ browserCheckStatus a
-setCheckStatus    :: Monad m => Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException) -> GenericBrowserAction m ()
-setCheckStatus  b = get >>= \ a -> put a {browserCheckStatus = b}
-withCheckStatus   :: Monad m => Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException) -> GenericBrowserAction m a -> GenericBrowserAction m a
-withCheckStatus a b = do
-  current <- getCheckStatus
-  setCheckStatus a
-  out <- b
-  setCheckStatus current
-  return out
-
-getManager         :: Monad m => GenericBrowserAction m Manager
-getManager         = get >>= \ a -> return $ manager a
-setManager         :: Monad m => Manager -> GenericBrowserAction m ()
-setManager       b = get >>= \ a -> put a {manager = b}
-
-#if !MIN_VERSION_http_conduit(1,8,5)
--- Canibalised from Network.HTTP.Conduit.Request for http-conduit < 1.8.5
--- | Extract a 'URI' from the request.
-getUri :: Request m' -> URI
-getUri req = URI
-    { uriScheme = if secure req
-                    then "https:"
-                    else "http:"
-    , uriAuthority = Just URIAuth
-        { uriUserInfo = ""
-        , uriRegName = S8.unpack $ host req
-        , uriPort = ':' : show (port req)
-        }
-    , uriPath = S8.unpack $ path req
-    , uriQuery = S8.unpack $ queryString req
-    , uriFragment = ""
-    }
-#endif
