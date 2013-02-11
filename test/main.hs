@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE CPP #-}
 import Test.Hspec
 import Test.HUnit
 import Control.Applicative
@@ -14,6 +15,9 @@ import Network.Wai hiding (requestBody, requestHeaders)
 import qualified Network.Wai as Wai
 import Network.Wai.Handler.Warp (run)
 import Network.HTTP.Conduit
+#if MIN_VERSION_http_conduit(1,9,0)
+import Network.HTTP.Conduit.Internal (receiveSetCookie)
+#endif
 import Network.HTTP.Conduit.Browser
 import Data.ByteString.Base64 (encode)
 import Data.Typeable (Typeable)
@@ -123,7 +127,7 @@ main = do
                 if lazyToStrict (responseBody elbs) /= S.empty
                      then error "Shouldn't have gotten the cookie back!"
                      else return ()
-            it "user-defined cookies survive redirects" $ do
+            it "custom cookies in global cookie jar survive redirects" $ do
                 tid <- forkIO $ run 3019 app
                 req <- parseUrl "http://127.0.0.1:3019/cookie_redir2"
                 let setCookie = def
@@ -136,8 +140,8 @@ main = do
                         responseBody <$> makeRequestLbs req
                 killThread tid
                 elbs @?= "nom-nom-nom"
-{- http-conduit-1.9+ cookieJar
-            it "user-defined cookies in req survive redirects" $ do
+#if MIN_VERSION_http_conduit(1,9,0)
+            it "custom cookies in Request's cookie jar survive redirects" $ do
                 tid <- forkIO $ run 3019 app
                 req <- parseUrl "http://127.0.0.1:3019/cookie_redir2"
                 let setCookie = def
@@ -147,11 +151,27 @@ main = do
                 elbs <- withManager $ \manager -> do
                     browse manager $ do
                         cjar <- receiveSetCookie setCookie req default_time True <$> getCookieJar
-                        let request = fst $ insertCookiesIntoRequest req cjar default_time
+                        let request = req {cookieJar = cjar}
                         responseBody <$> makeRequestLbs request
                 killThread tid
                 liftIO $ elbs @?= "nom-nom-nom"
--}
+            it "custom cookies in Request's cookie jar take priority over global cookiejar" $ do
+                tid <- forkIO $ run 3019 app
+                req <- parseUrl "http://127.0.0.1:3019/cookie_redir2"
+                let setCookie a = def
+                        { setCookieName = "flavor"
+                        , setCookieValue = a }
+                    default_time = UTCTime (ModifiedJulianDay 56200) (secondsToDiffTime 0)
+                elbs <- withManager $ \manager -> do
+                    browse manager $ do
+                        cjar_glb <- receiveSetCookie (setCookie "another-cookie") req default_time True <$> getCookieJar
+                        setCookieJar cjar_glb
+                        cjar_req <- receiveSetCookie (setCookie "chocolate-chip") req default_time True <$> getCookieJar
+                        let request = req {cookieJar = cjar_req}
+                        responseBody <$> makeRequestLbs request
+                killThread tid
+                liftIO $ elbs @?= "nom-nom-nom"
+#endif
             it "can save and load cookie jar" $ do
                 tid <- forkIO $ run 3011 app
                 request1 <- parseUrl "http://127.0.0.1:3011/cookies"
@@ -275,7 +295,7 @@ main = do
                         makeRequestLbs request
                 killThread tid
                 case elbs of
-                     Left (StatusCodeException _ _) -> return ()
+                     Left StatusCodeException{} -> return ()
                      _ -> error "1 redirect shouldn't be enough!"
             it "Makes multiple retries" $ do
                 writeIORef ref True
@@ -327,7 +347,7 @@ main = do
                 request <- parseUrl "http://127.0.0.1:3012/useragent"
                 elbs <- try $ withManager $ \manager -> do
                     browse manager $ do
-                        setCheckStatus $ Just $  \ _ _ -> Just $ toException TestException
+                        setCheckStatus $ Just $  \ _ _ _ -> Just $ toException TestException
                         makeRequestLbs request
                 killThread tid
                 case elbs of
