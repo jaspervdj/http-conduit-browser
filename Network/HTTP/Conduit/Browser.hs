@@ -393,9 +393,10 @@ makeRequest req = do
                         }) <- get
         let request' = (applyAuthorities auths request'')
                 {cookieJar = createCookieJar $
-                    unionBy ((==) `on` cookie_name)
-                        (destroyCookieJar (cookieJar request''))
-                        (destroyCookieJar cookie_jar')}
+                    (unionBy ((==) `on` cookie_name) `on` destroyCookieJar)
+                        (cookieJar request'')
+                        cookie_jar'
+                }
         res <- liftResourceT $ http request' manager'
         (cookie_jar, _) <- liftIO $ do
                 now <- getCurrentTime
