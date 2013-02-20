@@ -248,7 +248,7 @@ import Data.Function (on)
 #endif
 import Data.List (partition
 #if MIN_VERSION_http_conduit(1,9,0)
-                 ,unionBy
+                 ,union
 #endif
                  )
 import Data.Maybe (catMaybes, fromMaybe)
@@ -360,18 +360,11 @@ makeRequest req = do
         Just e' -> LE.throwIO e'
         Nothing -> LE.throwIO TooManyRetries
       | otherwise = do
-#if !MIN_VERSION_http_conduit(1,9,0)
-          res <- (`LE.catches`
-            [ LE.Handler $ \(e'::HttpException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e'
-            , LE.Handler $ \(e'::IOException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e'
-            ])
-#else
-          res <- LE.handle
-            (\(e'::HttpException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e')
-#endif
+          res <- LE.catch
             (if max_redirects == 0
                 then performRequest request'
                 else runRedirectionChain request' max_redirects)
+            (\(e'::HttpException) -> retryHelper request' (retry_count - 1) max_redirects check_status $ Just $ toException e')
           case check_status (responseStatus res) (responseHeaders res) (responseCookieJar res) of
             Nothing -> return res
             Just e' -> retryHelper request' (retry_count - 1) max_redirects check_status (Just e')
@@ -392,9 +385,9 @@ makeRequest req = do
                         , cookieFilter = cookie_filter
                         }) <- get
         let request' = (applyAuthorities auths request'')
-                {cookieJar = createCookieJar $
-                    (unionBy ((==) `on` cookie_name) `on` destroyCookieJar)
-                        (cookieJar request'')
+                {cookieJar = Just $ createCookieJar $
+                    (union `on` destroyCookieJar)
+                        (fromMaybe def $ cookieJar request'')
                         cookie_jar'
                 }
         res <- liftResourceT $ http request' manager'
@@ -418,10 +411,9 @@ makeRequest req = do
                     (applyAuthorities auths request')
                     (evictExpiredCookies cookie_jar now) now
         res <- liftResourceT $ http request'' manager'
-        now' <- liftIO getCurrentTime
         (cookie_jar'', _) <- liftIO $ do
                 now <- getCurrentTime
-                updateMyCookieJar res request'' now' cookie_jar' cookie_filter
+                updateMyCookieJar res request'' now cookie_jar' cookie_filter
         put $ s { browserCookieJar = cookie_jar''
                 , currentLocation = Just $ getUri request''
                 }

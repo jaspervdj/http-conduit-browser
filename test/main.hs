@@ -151,7 +151,7 @@ main = do
                 elbs <- withManager $ \manager -> do
                     browse manager $ do
                         cjar <- receiveSetCookie setCookie req default_time True <$> getCookieJar
-                        let request = req {cookieJar = cjar}
+                        let request = req {cookieJar = Just cjar}
                         responseBody <$> makeRequestLbs request
                 killThread tid
                 liftIO $ elbs @?= "nom-nom-nom"
@@ -167,7 +167,7 @@ main = do
                         cjar_glb <- receiveSetCookie (setCookie "another-cookie") req default_time True <$> getCookieJar
                         setCookieJar cjar_glb
                         cjar_req <- receiveSetCookie (setCookie "chocolate-chip") req default_time True <$> getCookieJar
-                        let request = req {cookieJar = cjar_req}
+                        let request = req {cookieJar = Just cjar_req}
                         responseBody <$> makeRequestLbs request
                 killThread tid
                 liftIO $ elbs @?= "nom-nom-nom"
