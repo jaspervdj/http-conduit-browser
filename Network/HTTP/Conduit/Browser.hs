@@ -91,13 +91,9 @@ module Network.HTTP.Conduit.Browser
     , withLocation
     -- ** Cookies
     -- *** Cookie jar
-#if !MIN_VERSION_http_conduit(1,9,0)
-    -- | All the cookies!
-#else
     -- | Global cookie jar.
     -- Cookies in Request's 'cookieJar' are preferred to global cookies if
     -- there's a name collision.
-#endif
     --
     -- default: @'def'@
     , getCookieJar
@@ -223,13 +219,10 @@ import Network.HTTP.Conduit
 import Network.HTTP.Conduit.Internal (httpRedirect
                                      ,getUri
                                      ,setUri
-#if MIN_VERSION_http_conduit(1,9,0)
                                      ,generateCookie
                                      ,insertCheckedCookie
-#endif
                                      )
 import qualified Network.HTTP.Types as HT
-import qualified Network.HTTP.Types.Header as HT
 import Network.Socks5 (SocksConf)
 import Network.URI (URI (..), parseRelativeReference, relativeTo)
 import Data.Time.Clock (getCurrentTime, UTCTime)
@@ -243,13 +236,9 @@ import qualified Data.Conduit.Binary as CB
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as L
 
-#if MIN_VERSION_http_conduit(1,9,0)
 import Data.Function (on)
-#endif
 import Data.List (partition
-#if MIN_VERSION_http_conduit(1,9,0)
                  ,union
-#endif
                  )
 import Data.Maybe (catMaybes, fromMaybe)
 import Control.Monad
@@ -263,9 +252,6 @@ import Control.Monad.Trans.Control (MonadBaseControl)
 import Control.Failure
 import qualified Control.Exception.Lifted as LE
 import Control.Exception (SomeException
-#if !MIN_VERSION_http_conduit(1,9,0)
-                         ,IOException
-#endif
                          ,toException)
 import qualified Data.Map as Map
 
@@ -377,7 +363,6 @@ makeRequest req = do
               return (res, mreq))
           liftResourceT
           request'
-#if MIN_VERSION_http_conduit(1,9,0)
     performRequest request'' = do
         s@(BrowserState { manager = manager'
                         , authorities = auths
@@ -398,27 +383,6 @@ makeRequest req = do
                 , currentLocation = Just $ getUri request'
                 }
         return res
-#else
-    performRequest request' = do
-        s@(BrowserState { manager = manager'
-                        , authorities = auths
-                        , browserCookieJar = cookie_jar
-                        , cookieFilter = cookie_filter
-                        }) <- get
-        now <- liftIO getCurrentTime
-        let (request'', cookie_jar') =
-                insertCookiesIntoRequest
-                    (applyAuthorities auths request')
-                    (evictExpiredCookies cookie_jar now) now
-        res <- liftResourceT $ http request'' manager'
-        (cookie_jar'', _) <- liftIO $ do
-                now <- getCurrentTime
-                updateMyCookieJar res request'' now cookie_jar' cookie_filter
-        put $ s { browserCookieJar = cookie_jar''
-                , currentLocation = Just $ getUri request''
-                }
-        return res
-#endif
 
 applyAuthorities :: (Request a -> Maybe (BS.ByteString, BS.ByteString)) -> Request a -> Request a
 applyAuthorities auths request' =
