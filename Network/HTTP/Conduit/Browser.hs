@@ -230,7 +230,7 @@ import Web.Cookie (parseSetCookie)
 import Data.Certificate.X509 (X509)
 import Network.TLS (PrivateKey)
 
-import Data.Conduit
+import qualified Data.Conduit as C
 import qualified Data.Conduit.Binary as CB
 
 import qualified Data.ByteString as BS
@@ -245,10 +245,8 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.State
-import Control.Monad.Trans.Resource (liftResourceT)
-#if !MIN_VERSION_conduit(0,5,3)
+import Control.Monad.Trans.Resource (MonadResource, ResourceT, liftResourceT)
 import Control.Monad.Trans.Control (MonadBaseControl)
-#endif
 import Control.Failure
 import qualified Control.Exception.Lifted as LE
 import Control.Exception (SomeException
@@ -314,7 +312,7 @@ parseRelativeUrl url =
 #endif
 
 -- | Make a request, using all the state in the current BrowserState
-makeRequest :: (MonadBaseControl IO m, MonadResource m) => Request (ResourceT IO) -> GenericBrowserAction m (Response (ResumableSource (ResourceT IO) BS.ByteString))
+makeRequest :: (MonadBaseControl IO m, MonadResource m) => Request (ResourceT IO) -> GenericBrowserAction m (Response (C.ResumableSource (ResourceT IO) BS.ByteString))
 makeRequest req = do
   BrowserState
     { maxRetryCount = max_retry_count
@@ -411,7 +409,7 @@ makeRequestLbs = liftResourceT . lbsResponse <=< makeRequest
 downloadFile :: (MonadResource m, MonadBaseControl IO m) => FilePath -> Request (ResourceT IO) -> GenericBrowserAction m ()
 downloadFile file request = do
   res <- makeRequest request
-  liftResourceT $ responseBody res $$+- CB.sinkFile file
+  liftResourceT $ responseBody res C.$$+- CB.sinkFile file
 
 updateMyCookieJar :: Response a -> Request (ResourceT IO) -> UTCTime -> CookieJar -> (Request (ResourceT IO) -> Cookie -> IO Bool) -> IO (CookieJar, Response a)
 updateMyCookieJar response request' now cookie_jar cookie_filter = do
