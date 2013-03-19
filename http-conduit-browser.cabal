@@ -1,5 +1,5 @@
 name:            http-conduit-browser
-version:         1.8.1
+version:         1.8.1.1
 license:         BSD3
 license-file:    LICENSE
 author:          Myles C. Maxfield <myles.maxfield@gmail.com>
@@ -35,7 +35,7 @@ library
                  , containers
                  , socks
                  , network               >= 2.3
-                 , failure
+                 , failure               >= 0.2
                  , monad-control
                  , resourcet             >= 0.3    && < 0.5
                  , certificate, tls
