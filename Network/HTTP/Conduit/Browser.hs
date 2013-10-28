@@ -437,46 +437,42 @@ getManager         = get >>= \ a -> return $ manager a
 setManager         :: Monad m => Manager -> GenericBrowserAction m ()
 setManager       b = get >>= \ a -> put a {manager = b}
 
-#define RET(x) x
-#define CONCAT(x,y) RET(x)y
-#define GENERIC_FIELD(Name, field, Type)\
-    CONCAT(get,Name)      :: Monad m => GenericBrowserAction m (Type)      ;\
-    CONCAT(get,Name)      = gets field                                     ;\
-    CONCAT(set,Name)      :: Monad m => (Type) -> GenericBrowserAction m ()  ;\
-    CONCAT(set,Name)    b = get >>= \ a -> put a {field = b}               ;\
-    CONCAT(with,Name)     :: Monad m => (Type) -> GenericBrowserAction m a -> GenericBrowserAction m a   ;\
-    CONCAT(with,Name) a b = do     \
-      current <- CONCAT(get,Name) ;\
-      CONCAT(set,Name) a          ;\
+#define GENERIC_FIELD(getName, setName, withName, field, Type)\
+    getName     :: Monad m => GenericBrowserAction m (Type)         ;\
+    getName      = gets field                                       ;\
+    setName      :: Monad m => (Type) -> GenericBrowserAction m ()  ;\
+    setName    b = get >>= \ a -> put a {field = b}                 ;\
+    withName     :: Monad m => (Type) -> GenericBrowserAction m a -> GenericBrowserAction m a   ;\
+    withName a b = do               \
+      current <- getName           ;\
+      setName a                    ;\
       out <- b                     ;\
-      CONCAT(set,Name) current    ;\
+      setName current              ;\
       return out                   ;\
 
-GENERIC_FIELD(Location, currentLocation, Maybe URI)
+GENERIC_FIELD(getLocation, setLocation, withLocation, currentLocation, Maybe URI)
 
-GENERIC_FIELD(MaxRedirects, maxRedirects, Maybe Int)
+GENERIC_FIELD(getMaxRedirects, setMaxRedirects, withMaxRedirects, maxRedirects, Maybe Int)
 
-GENERIC_FIELD(MaxRetryCount, maxRetryCount, Int)
+GENERIC_FIELD(getMaxRetryCount, setMaxRetryCount, withMaxRetryCount, maxRetryCount, Int)
 
-GENERIC_FIELD(Timeout, timeout, Maybe Int)
+GENERIC_FIELD(getTimeout, setTimeout, withTimeout, timeout, Maybe Int)
 
-GENERIC_FIELD(Authorities, authorities, Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString))
+GENERIC_FIELD(getAuthorities, setAuthorities, withAuthorities, authorities, Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString))
 
-GENERIC_FIELD(ClientCertificates, browserClientCertificates, Maybe [(X509, Maybe PrivateKey)])
+GENERIC_FIELD(getClientCertificates, setClientCertificates, withClientCertificates, browserClientCertificates, Maybe [(X509, Maybe PrivateKey)])
 
-GENERIC_FIELD(CookieFilter, cookieFilter, Request (ResourceT IO) -> Cookie -> IO Bool)
+GENERIC_FIELD(getCookieFilter, setCookieFilter, withCookieFilter, cookieFilter, Request (ResourceT IO) -> Cookie -> IO Bool)
 
-GENERIC_FIELD(CookieJar, browserCookieJar, CookieJar)
+GENERIC_FIELD(getCookieJar, setCookieJar, withCookieJar, browserCookieJar, CookieJar)
 
-GENERIC_FIELD(CurrentProxy, currentProxy, Maybe Proxy)
+GENERIC_FIELD(getCurrentProxy, setCurrentProxy, withCurrentProxy, currentProxy, Maybe Proxy)
 
-GENERIC_FIELD(CurrentSocksProxy, currentSocksProxy, Maybe SocksConf)
+GENERIC_FIELD(getCurrentSocksProxy, setCurrentSocksProxy, withCurrentSocksProxy, currentSocksProxy, Maybe SocksConf)
 
-GENERIC_FIELD(CheckStatus, browserCheckStatus, Maybe (HT.Status -> HT.ResponseHeaders -> CookieJar -> Maybe SomeException))
+GENERIC_FIELD(getCheckStatus, setCheckStatus, withCheckStatus, browserCheckStatus, Maybe (HT.Status -> HT.ResponseHeaders -> CookieJar -> Maybe SomeException))
 
 #undef GENERIC_FIELD
-#undef CONCAT
-#undef RET
 
 getDefaultHeaders :: Monad m => GenericBrowserAction m HT.RequestHeaders
 getDefaultHeaders = gets $ Map.toList . defaultHeaders
